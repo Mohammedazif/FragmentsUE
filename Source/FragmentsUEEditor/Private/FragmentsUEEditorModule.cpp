@@ -7,7 +7,10 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UObject/SavePackage.h"
 #include "Materials/MaterialExpressionMultiply.h"
+#include "Materials/MaterialExpressionVertexColor.h"
+#include "Materials/MaterialExpressionComponentMask.h"
 #include "Containers/Ticker.h"
+
 void FFragmentsUEEditorModule::GenerateMaterials()
 {
 	UMaterialFactoryNew* MaterialFactory = NewObject<UMaterialFactoryNew>();
@@ -42,7 +45,24 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 			BaseColorExp->ParameterName = TEXT("BaseColor");
 			BaseColorExp->DefaultValue = FLinearColor::White;
 			BaseMaterialObj->GetExpressionCollection().AddExpression(BaseColorExp);
-			BaseMaterialObj->GetEditorOnlyData()->BaseColor.Expression = BaseColorExp;
+			
+			UMaterialExpressionVertexColor* VertexColorExp = NewObject<UMaterialExpressionVertexColor>(BaseMaterialObj);
+			BaseMaterialObj->GetExpressionCollection().AddExpression(VertexColorExp);
+			
+			UMaterialExpressionComponentMask* BaseColorMask = NewObject<UMaterialExpressionComponentMask>(BaseMaterialObj);
+			BaseColorMask->Input.Expression = BaseColorExp;
+			BaseColorMask->R = 1;
+			BaseColorMask->G = 1;
+			BaseColorMask->B = 1;
+			BaseColorMask->A = 0;
+			BaseMaterialObj->GetExpressionCollection().AddExpression(BaseColorMask);
+
+			UMaterialExpressionMultiply* BaseColorMul = NewObject<UMaterialExpressionMultiply>(BaseMaterialObj);
+			BaseColorMul->A.Expression = BaseColorMask;
+			BaseColorMul->B.Expression = VertexColorExp;
+			BaseMaterialObj->GetExpressionCollection().AddExpression(BaseColorMul);
+			
+			BaseMaterialObj->GetEditorOnlyData()->BaseColor.Expression = BaseColorMul;
 
 			UMaterialExpressionScalarParameter* OpacityExp = NewObject<UMaterialExpressionScalarParameter>(BaseMaterialObj);
 			OpacityExp->ParameterName = TEXT("Opacity");
@@ -52,13 +72,13 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 
 			UMaterialExpressionScalarParameter* RoughnessExp = NewObject<UMaterialExpressionScalarParameter>(BaseMaterialObj);
 			RoughnessExp->ParameterName = TEXT("Roughness");
-			RoughnessExp->DefaultValue = 0.85f;
+			RoughnessExp->DefaultValue = 0.5f;
 			BaseMaterialObj->GetExpressionCollection().AddExpression(RoughnessExp);
 			BaseMaterialObj->GetEditorOnlyData()->Roughness.Expression = RoughnessExp;
 
 			UMaterialExpressionScalarParameter* SpecularExp = NewObject<UMaterialExpressionScalarParameter>(BaseMaterialObj);
 			SpecularExp->ParameterName = TEXT("Specular");
-			SpecularExp->DefaultValue = 0.0f; // Prevent sun glare from turning light colors pure white
+			SpecularExp->DefaultValue = 0.5f; 
 			BaseMaterialObj->GetExpressionCollection().AddExpression(SpecularExp);
 			BaseMaterialObj->GetEditorOnlyData()->Specular.Expression = SpecularExp;
 
@@ -111,7 +131,24 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 			BaseColorExp->ParameterName = TEXT("BaseColor");
 			BaseColorExp->DefaultValue = FLinearColor::White;
 			TransMaterialObj->GetExpressionCollection().AddExpression(BaseColorExp);
-			TransMaterialObj->GetEditorOnlyData()->BaseColor.Expression = BaseColorExp;
+
+			UMaterialExpressionVertexColor* VertexColorExp = NewObject<UMaterialExpressionVertexColor>(TransMaterialObj);
+			TransMaterialObj->GetExpressionCollection().AddExpression(VertexColorExp);
+
+			UMaterialExpressionComponentMask* BaseColorMask = NewObject<UMaterialExpressionComponentMask>(TransMaterialObj);
+			BaseColorMask->Input.Expression = BaseColorExp;
+			BaseColorMask->R = 1;
+			BaseColorMask->G = 1;
+			BaseColorMask->B = 1;
+			BaseColorMask->A = 0;
+			TransMaterialObj->GetExpressionCollection().AddExpression(BaseColorMask);
+
+			UMaterialExpressionMultiply* BaseColorMul = NewObject<UMaterialExpressionMultiply>(TransMaterialObj);
+			BaseColorMul->A.Expression = BaseColorMask;
+			BaseColorMul->B.Expression = VertexColorExp;
+			TransMaterialObj->GetExpressionCollection().AddExpression(BaseColorMul);
+
+			TransMaterialObj->GetEditorOnlyData()->BaseColor.Expression = BaseColorMul;
 
 			UMaterialExpressionScalarParameter* OpacityExp = NewObject<UMaterialExpressionScalarParameter>(TransMaterialObj);
 			OpacityExp->ParameterName = TEXT("Opacity");
@@ -184,13 +221,30 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 			// Exact IFC color is roughly a dark tinted blue
 			UMaterialExpressionVectorParameter* BaseColorExp = NewObject<UMaterialExpressionVectorParameter>(GlassMaterialObj);
 			BaseColorExp->ParameterName = TEXT("BaseColor");
-			BaseColorExp->DefaultValue = FLinearColor(0.05f, 0.15f, 0.35f, 1.0f); // IFC Blueish tint
+			BaseColorExp->DefaultValue = FLinearColor::White;
 			GlassMaterialObj->GetExpressionCollection().AddExpression(BaseColorExp);
-			GlassMaterialObj->GetEditorOnlyData()->BaseColor.Expression = BaseColorExp;
+
+			UMaterialExpressionVertexColor* VertexColorExp = NewObject<UMaterialExpressionVertexColor>(GlassMaterialObj);
+			GlassMaterialObj->GetExpressionCollection().AddExpression(VertexColorExp);
+
+			UMaterialExpressionComponentMask* BaseColorMask = NewObject<UMaterialExpressionComponentMask>(GlassMaterialObj);
+			BaseColorMask->Input.Expression = BaseColorExp;
+			BaseColorMask->R = 1;
+			BaseColorMask->G = 1;
+			BaseColorMask->B = 1;
+			BaseColorMask->A = 0;
+			GlassMaterialObj->GetExpressionCollection().AddExpression(BaseColorMask);
+
+			UMaterialExpressionMultiply* BaseColorMul = NewObject<UMaterialExpressionMultiply>(GlassMaterialObj);
+			BaseColorMul->A.Expression = BaseColorMask;
+			BaseColorMul->B.Expression = VertexColorExp;
+			GlassMaterialObj->GetExpressionCollection().AddExpression(BaseColorMul);
+
+			GlassMaterialObj->GetEditorOnlyData()->BaseColor.Expression = BaseColorMul;
 			
 			// Add a slight emissive glow so the blue tint is always visible and luminous
 			UMaterialExpressionMultiply* EmissiveMul = NewObject<UMaterialExpressionMultiply>(GlassMaterialObj);
-			EmissiveMul->A.Expression = BaseColorExp;
+			EmissiveMul->A.Expression = BaseColorMul;
 			EmissiveMul->ConstB = 0.35f; // 35% of base color as emissive
 			GlassMaterialObj->GetExpressionCollection().AddExpression(EmissiveMul);
 			GlassMaterialObj->GetEditorOnlyData()->EmissiveColor.Expression = EmissiveMul;

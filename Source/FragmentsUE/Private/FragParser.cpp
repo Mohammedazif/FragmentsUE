@@ -279,16 +279,13 @@ FFragImportResult FFragParser::ParseModel(const uint8* Buffer, int32 BufferSize,
 			UE_LOG(LogFragmentsUE, Log, TEXT("  Material[%d] raw: R=%.4f G=%.4f B=%.4f A=%.4f"), i, R, G, B, A);
 			
 			// Auto-detect range: if any value is > 1.0, it's already 0-255. Otherwise, assume 0-1.
-			float ScaleVal = (R > 1.0f || G > 1.0f || B > 1.0f || A > 1.0f) ? 1.0f : 255.0f;
+			float ScaleVal = (R > 1.0f || G > 1.0f || B > 1.0f || A > 1.0f) ? 255.0f : 1.0f;
 			
-			// Convert to [0, 255] for FColor, which performs sRGB -> Linear conversion
-			FColor SRGBColor(
-				FMath::Clamp(static_cast<int32>(R * ScaleVal), 0, 255),
-				FMath::Clamp(static_cast<int32>(G * ScaleVal), 0, 255),
-				FMath::Clamp(static_cast<int32>(B * ScaleVal), 0, 255),
-				FMath::Clamp(static_cast<int32>(A * ScaleVal), 0, 255)
-			);
-			FLinearColor Color = FLinearColor(SRGBColor);
+			// We MUST pass these raw values directly to FLinearColor. 
+			// FMeshDescription stores these as linear values. When UStaticMesh builds, it converts them 
+			// to 8-bit sRGB, and then the Material's VertexColor node converts them back to Linear.
+			// This matches exactly what the Material Instance (BaseColor) was receiving before.
+			FLinearColor Color(R / ScaleVal, G / ScaleVal, B / ScaleVal, A / ScaleVal);
 			
 			UE_LOG(LogFragmentsUE, Log, TEXT("  Material[%d] final: R=%.4f G=%.4f B=%.4f A=%.4f (opacity=%.4f)"), 
 				i, Color.R, Color.G, Color.B, Color.A, Color.A);

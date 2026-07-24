@@ -7,7 +7,7 @@
 #include "UObject/Package.h"
 #include "PhysicsEngine/BodySetup.h"
 
-UStaticMesh* FFragMeshBuilder::BuildStaticMesh(const FFragGeometry& Geometry, UObject* Outer, const FName& MeshName)
+UStaticMesh* FFragMeshBuilder::BuildStaticMesh(UObject* Outer, const FFragGeometry& Geometry, const FName& MeshName, const FLinearColor& Color, float Opacity, UMaterialInterface* Material)
 {
 	if (Geometry.Positions.IsEmpty() || Geometry.Indices.IsEmpty())
 	{
@@ -22,10 +22,10 @@ UStaticMesh* FFragMeshBuilder::BuildStaticMesh(const FFragGeometry& Geometry, UO
 	// Set up source model
 	FStaticMeshSourceModel& SourceModel = StaticMesh->AddSourceModel();
 	bool bHasNormals = Geometry.Normals.Num() > 0 && Geometry.Normals.Num() == Geometry.Positions.Num();
-	SourceModel.BuildSettings.bRecomputeNormals = !bHasNormals; // Recompute only if missing
-	SourceModel.BuildSettings.bRecomputeTangents = true; // MUST be true for PBR materials!
-	SourceModel.BuildSettings.bUseMikkTSpace = false; // Disable MikkTSpace to prevent CAD shading corruption
-	SourceModel.BuildSettings.bRemoveDegenerates = false; // Prevent removing back-face triangles
+	SourceModel.BuildSettings.bRecomputeNormals = !bHasNormals; // Recompute only if our normals are missing
+	SourceModel.BuildSettings.bRecomputeTangents = true;        // Always recompute tangents from geometry
+	SourceModel.BuildSettings.bUseMikkTSpace = false;           // Disable MikkTSpace: our planar UVs (0.01 scale) create degenerate tangent bases with MikkTSpace
+	SourceModel.BuildSettings.bRemoveDegenerates = false;       // Keep all faces: IFC thin geometry would be removed otherwise
 	SourceModel.BuildSettings.bUseHighPrecisionTangentBasis = false;
 	SourceModel.BuildSettings.bUseFullPrecisionUVs = false;
 	SourceModel.BuildSettings.bGenerateLightmapUVs = false;
@@ -33,7 +33,7 @@ UStaticMesh* FFragMeshBuilder::BuildStaticMesh(const FFragGeometry& Geometry, UO
 	SourceModel.BuildSettings.DstLightmapIndex = 1;
 
 	FMeshDescription MeshDesc;
-	PopulateMeshDescription(Geometry, MeshDesc);
+	PopulateMeshDescription(Geometry, MeshDesc, Color, Opacity);
 
 	TArray<const FMeshDescription*> MeshDescPtrs;
 	MeshDescPtrs.Add(&MeshDesc);
@@ -46,26 +46,45 @@ UStaticMesh* FFragMeshBuilder::BuildStaticMesh(const FFragGeometry& Geometry, UO
 #endif
 	BuildParams.bBuildSimpleCollision = false;
 
-	StaticMesh->GetStaticMaterials().Add(FStaticMaterial(nullptr, FName("Material_0"), FName("Material_0")));
-	StaticMesh->BuildFromMeshDescriptions(MeshDescPtrs, BuildParams);
-
-	// Ensure collision settings are correct
+	if (Material)
+	{
+		StaticMesh->GetStaticMaterials().Add(FStaticMaterial(Material, FName("Material_0"), FName("Material_0")));
+	}
+	else
+	{
+		StaticMesh->GetStaticMaterials().Add(FStaticMaterial(nullptr, FName("Material_0"), FName("Material_0")));
+	}
+	
+	// Ensure collision settings are correct before building the mesh
+	if (!StaticMesh->GetBodySetup())
+	{
+		StaticMesh->CreateBodySetup();
+	}
 	if (UBodySetup* BodySetup = StaticMesh->GetBodySetup())
 	{
 		BodySetup->CollisionTraceFlag = CTF_UseComplexAsSimple;
+		BodySetup->bDoubleSidedGeometry = true;
+		BodySetup->bMeshCollideAll = true;
+	}
+
+	StaticMesh->BuildFromMeshDescriptions(MeshDescPtrs, BuildParams);
+	
+	// Force cook the complex physics mesh for runtime use
+	if (UBodySetup* BodySetup = StaticMesh->GetBodySetup())
+	{
+		BodySetup->CreatePhysicsMeshes();
 	}
 
 	return StaticMesh;
 }
 
-void FFragMeshBuilder::PopulateMeshDescription(const FFragGeometry& Geometry, FMeshDescription& OutMeshDesc)
+void FFragMeshBuilder::PopulateMeshDescription(const FFragGeometry& Geometry, FMeshDescription& OutMeshDesc, const FLinearColor& Color, float Opacity)
 {
 	FStaticMeshAttributes Attributes(OutMeshDesc);
 	Attributes.Register();
 
 	TVertexAttributesRef<FVector3f> VertexPositions = Attributes.GetVertexPositions();
 	TVertexInstanceAttributesRef<FVector3f> VertexInstanceNormals = Attributes.GetVertexInstanceNormals();
-	TVertexInstanceAttributesRef<FVector2f> VertexInstanceUVs = Attributes.GetVertexInstanceUVs();
 	TVertexInstanceAttributesRef<FVector4f> VertexInstanceColors = Attributes.GetVertexInstanceColors();
 	TPolygonGroupAttributesRef<FName> PolygonGroupImportedMaterialSlotNames = Attributes.GetPolygonGroupMaterialSlotNames();
 
@@ -115,39 +134,15 @@ void FFragMeshBuilder::PopulateMeshDescription(const FFragGeometry& Geometry, FM
 			VertexInstanceNormals[Inst1] = (FVector3f)Geometry.Normals[Idx1];
 			VertexInstanceNormals[Inst2] = (FVector3f)Geometry.Normals[Idx2];
 		}
+		
+		VertexInstanceColors[Inst0] = FVector4f(Color.R, Color.G, Color.B, Opacity);
+		VertexInstanceColors[Inst1] = FVector4f(Color.R, Color.G, Color.B, Opacity);
+		VertexInstanceColors[Inst2] = FVector4f(Color.R, Color.G, Color.B, Opacity);
 		// If not bHasNormals, Unreal will recompute them because we'll set bRecomputeNormals dynamically.
-		auto GetPlanarUV = [](const FVector3f& Pos, const FVector3f& Normal) -> FVector2f
-		{
-			FVector3f AbsNormal(FMath::Abs(Normal.X), FMath::Abs(Normal.Y), FMath::Abs(Normal.Z));
-			if (AbsNormal.Z >= AbsNormal.X && AbsNormal.Z >= AbsNormal.Y)
-				return FVector2f(Pos.X, Pos.Y) * 0.01f;
-			else if (AbsNormal.X >= AbsNormal.Y)
-				return FVector2f(Pos.Y, Pos.Z) * 0.01f;
-			else
-				return FVector2f(Pos.X, Pos.Z) * 0.01f;
-		};
-
-		FVector3f P0 = (FVector3f)Geometry.Positions[Idx0];
-		FVector3f P1 = (FVector3f)Geometry.Positions[Idx1];
-		FVector3f P2 = (FVector3f)Geometry.Positions[Idx2];
-
-		FVector3f FaceNormal = FVector3f::CrossProduct(P1 - P0, P2 - P0).GetSafeNormal();
-		if (FaceNormal.IsNearlyZero())
-		{
-			FaceNormal = FVector3f(0, 0, 1);
-		}
-
-		VertexInstanceUVs[Inst0] = GetPlanarUV(P0, FaceNormal);
-		VertexInstanceUVs[Inst1] = GetPlanarUV(P1, FaceNormal);
-		VertexInstanceUVs[Inst2] = GetPlanarUV(P2, FaceNormal);
-
-		VertexInstanceColors[Inst0] = FVector4f(1.0f, 1.0f, 1.0f, 1.0f);
-		VertexInstanceColors[Inst1] = FVector4f(1.0f, 1.0f, 1.0f, 1.0f);
-		VertexInstanceColors[Inst2] = FVector4f(1.0f, 1.0f, 1.0f, 1.0f);
 	}
 }
 
-void FFragMeshBuilder::BuildProceduralMesh(const FFragGeometry& Geometry, UProceduralMeshComponent* ProcMeshComp)
+void FFragMeshBuilder::BuildProceduralMesh(const FFragGeometry& Geometry, UProceduralMeshComponent* ProcMeshComp, const FLinearColor& Color, float Opacity)
 {
 	if (!ProcMeshComp || Geometry.Positions.IsEmpty() || Geometry.Indices.IsEmpty())
 	{
@@ -159,9 +154,8 @@ void FFragMeshBuilder::BuildProceduralMesh(const FFragGeometry& Geometry, UProce
 	TArray<FVector> Normals = Geometry.Normals;
 	TArray<FVector2D> UV0; // Empty for now
 	TArray<FLinearColor> VertexColors;
+	VertexColors.Init(FLinearColor(Color.R, Color.G, Color.B, Opacity), Vertices.Num());
 	TArray<FProcMeshTangent> Tangents;
-
-	VertexColors.Init(FLinearColor::White, Vertices.Num());
 
 	ProcMeshComp->CreateMeshSection_LinearColor(
 		0, 
@@ -171,6 +165,6 @@ void FFragMeshBuilder::BuildProceduralMesh(const FFragGeometry& Geometry, UProce
 		UV0, 
 		VertexColors, 
 		Tangents, 
-		false // bCreateCollision
+		true // bCreateCollision
 	);
 }

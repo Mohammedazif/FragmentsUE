@@ -66,13 +66,13 @@ private:
 		const FFragSpatialNode& Node, 
 		AActor* ParentActor, 
 		const TMap<int32, TArray<const FFragInstance*>>& InstancesByLocalId,
-		TMap<int32, UStaticMesh*>& StaticMeshCache,
+		TMap<int64, UStaticMesh*>& StaticMeshCache,
+		TMap<uint32, UMaterialInstanceDynamic*>& MaterialCache,
 		const FFragImportResult& Result,
 		const FFragImportOptions& Options,
 		UMaterialInterface* BaseMaterial,
 		UMaterialInterface* TranslucentMaterial,
 		UMaterialInterface* GlassMaterial,
-		TMap<uint32, UMaterialInstanceDynamic*>& MaterialCache,
 		int32& SpawnCount,
 		FScopedSlowTask* SlowTask = nullptr);
 };

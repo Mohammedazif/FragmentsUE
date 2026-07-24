@@ -31,6 +31,38 @@ void AFragmentsActor::Destroyed()
 	SpawnedChildActors.Empty();
 }
 
+UMaterialInstanceDynamic* AFragmentsActor::GetOrCreateMaterial(
+	UMaterialInterface* BaseMaterial, 
+	const FLinearColor& Color, 
+	float Opacity, 
+	bool bDoubleSided,
+	TMap<uint32, UMaterialInstanceDynamic*>& OutMaterialCache,
+	bool bIsGlass)
+{
+	if (!BaseMaterial) return nullptr;
+
+	uint32 ColorHash = GetTypeHash(Color) ^ GetTypeHash(Opacity) ^ (bIsGlass ? 1 : 0);
+	
+	if (UMaterialInstanceDynamic** FoundMID = OutMaterialCache.Find(ColorHash))
+	{
+		return *FoundMID;
+	}
+
+	UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+	MID->SetVectorParameterValue(TEXT("BaseColor"), Color); // M_FragBase parameter
+	MID->SetVectorParameterValue(TEXT("Color"), Color); // Datasmith materials use "Color"
+	MID->SetScalarParameterValue(TEXT("Opacity"), Opacity); // M_FragBase opacity parameter
+	
+	if (!bIsGlass)
+	{
+		MID->SetScalarParameterValue(TEXT("Roughness"), 0.65f);
+		MID->SetScalarParameterValue(TEXT("Specular"), 0.4f);
+	}
+	
+	OutMaterialCache.Add(ColorHash, MID);
+	return MID;
+}
+
 void AFragmentsActor::BuildFromImportResult(
 	const FFragImportResult& Result, 
 	const FFragImportOptions& Options, 
@@ -49,8 +81,8 @@ void AFragmentsActor::BuildFromImportResult(
 		return;
 	}
 
+	TMap<int64, UStaticMesh*> StaticMeshCache;
 	TMap<uint32, UMaterialInstanceDynamic*> MaterialCache;
-	TMap<int32, UStaticMesh*> StaticMeshCache;
 
 	if (Options.bImportAsHierarchy && Result.SpatialRoot.Children.Num() > 0)
 	{
@@ -66,7 +98,7 @@ void AFragmentsActor::BuildFromImportResult(
 		SlowTask.MakeDialog(1.0f);
 		SlowTaskPtr = &SlowTask;
 #endif
-		SpawnHierarchyNode(Result.SpatialRoot, this, InstancesByLocalId, StaticMeshCache, Result, Options, BaseMaterial, TranslucentMaterial, GlassMaterial, MaterialCache, SpawnCount, SlowTaskPtr);
+		SpawnHierarchyNode(Result.SpatialRoot, this, InstancesByLocalId, StaticMeshCache, MaterialCache, Result, Options, BaseMaterial, TranslucentMaterial, GlassMaterial, SpawnCount, SlowTaskPtr);
 		return;
 	}
 
@@ -135,23 +167,29 @@ void AFragmentsActor::BuildFromImportResult(
 				TargetMaterial = TranslucentMaterial;
 			}
 		}
-		
-		UMaterialInstanceDynamic* MID = GetOrCreateMaterial(TargetMaterial, Pair.Color, AdjustedOpacity, Pair.bDoubleSided, MaterialCache, bIsGlass);
+
+		FLinearColor CorrectedColor;
+		CorrectedColor.R = FMath::Pow(Pair.Color.R, 2.2f);
+		CorrectedColor.G = FMath::Pow(Pair.Color.G, 2.2f);
+		CorrectedColor.B = FMath::Pow(Pair.Color.B, 2.2f);
+		CorrectedColor.A = Pair.Color.A;
+
+		UMaterialInstanceDynamic* TargetMID = GetOrCreateMaterial(TargetMaterial, CorrectedColor, AdjustedOpacity, Pair.bDoubleSided, MaterialCache, bIsGlass);
 		
 		if (Options.MeshMode == EFragMeshMode::Static)
 		{
 			UStaticMesh* StaticMesh = nullptr;
-			if (UStaticMesh** CachedMesh = StaticMeshCache.Find(Pair.GeometryIndex))
+			if (UStaticMesh** CachedMesh = StaticMeshCache.Find(Key))
 			{
 				StaticMesh = *CachedMesh;
 			}
 			else
 			{
-				FString MeshName = FString::Printf(TEXT("SM_FragGeom_%d"), Pair.GeometryIndex);
-				StaticMesh = FFragMeshBuilder::BuildStaticMesh(Geom, this, *MeshName);
+				FString MeshName = FString::Printf(TEXT("SM_FragGeom_%d_Mat_%d"), Geom.GeometryIndex, Pair.MaterialIndex);
+				StaticMesh = FFragMeshBuilder::BuildStaticMesh(this, Geom, *MeshName, CorrectedColor, AdjustedOpacity, TargetMID);
 				if (StaticMesh)
 				{
-					StaticMeshCache.Add(Pair.GeometryIndex, StaticMesh);
+					StaticMeshCache.Add(Key, StaticMesh);
 				}
 			}
 
@@ -162,21 +200,13 @@ void AFragmentsActor::BuildFromImportResult(
 				ISMC->SetStaticMesh(StaticMesh);
 				ISMC->SetupAttachment(ModelRoot);
 				
-				if (MID)
+				ISMC->SetMaterial(0, TargetMID);
+				ISMC->SetCollisionEnabled(ECollisionEnabled::NoCollision); // Disable collision universally
+				ISMC->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+				
+				if (bIsGlass)
 				{
-					ISMC->SetMaterial(0, MID);
-					if (bIsGlass)
-					{
-						UE_LOG(LogFragmentsUE, Warning, TEXT("WINDOW DEBUG: Applied Glass Material (MID) to component %s"), *ISMC->GetName());
-					}
-				}
-				else
-				{
-					ISMC->SetMaterial(0, TargetMaterial);
-					if (bIsGlass)
-					{
-						UE_LOG(LogFragmentsUE, Warning, TEXT("WINDOW DEBUG: Applied Glass Material (Base) to component %s"), *ISMC->GetName());
-					}
+					UE_LOG(LogFragmentsUE, Warning, TEXT("WINDOW DEBUG: Applied Glass Material to component %s"), *ISMC->GetName());
 				}
 
 				ISMC->RegisterComponent();
@@ -190,12 +220,10 @@ void AFragmentsActor::BuildFromImportResult(
 			PMC->SetupAttachment(ModelRoot);
 			PMC->bUseAsyncCooking = true;
 
-			FFragMeshBuilder::BuildProceduralMesh(Geom, PMC);
-
-			if (MID)
-			{
-				PMC->SetMaterial(0, MID);
-			}
+			FFragMeshBuilder::BuildProceduralMesh(Geom, PMC, CorrectedColor, AdjustedOpacity);
+			PMC->SetMaterial(0, TargetMID);
+			PMC->SetCollisionEnabled(ECollisionEnabled::NoCollision); // Disable collision universally
+			PMC->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 
 			PMC->RegisterComponent();
 			ProceduralMeshes.Add(Key, PMC);
@@ -236,39 +264,7 @@ void AFragmentsActor::BuildFromImportResult(
 	}
 }
 
-UMaterialInstanceDynamic* AFragmentsActor::GetOrCreateMaterial(
-	UMaterialInterface* BaseMaterial, 
-	const FLinearColor& Color, 
-	float Opacity, 
-	bool bDoubleSided,
-	TMap<uint32, UMaterialInstanceDynamic*>& OutMaterialCache,
-	bool bIsGlass)
-{
-	if (!BaseMaterial)
-	{
-		return nullptr;
-	}
 
-	uint32 Hash = GetTypeHash(Color);
-	Hash = HashCombine(Hash, GetTypeHash(Opacity));
-	Hash = HashCombine(Hash, GetTypeHash(bDoubleSided));
-	Hash = HashCombine(Hash, GetTypeHash(bIsGlass));
-
-	if (UMaterialInstanceDynamic** FoundMID = OutMaterialCache.Find(Hash))
-	{
-		return *FoundMID;
-	}
-
-	UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
-	
-	FLinearColor FinalColor = Color;
-
-	MID->SetVectorParameterValue(TEXT("BaseColor"), FinalColor);
-	MID->SetScalarParameterValue(TEXT("Opacity"), Opacity);
-
-	OutMaterialCache.Add(Hash, MID);
-	return MID;
-}
 
 static bool HasGeometry(const FFragSpatialNode& Node, const TMap<int32, TArray<const FFragInstance*>>& InstancesByLocalId)
 {
@@ -284,13 +280,13 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 	const FFragSpatialNode& Node, 
 	AActor* ParentActor, 
 	const TMap<int32, TArray<const FFragInstance*>>& InstancesByLocalId,
-	TMap<int32, UStaticMesh*>& StaticMeshCache,
+	TMap<int64, UStaticMesh*>& StaticMeshCache,
+	TMap<uint32, UMaterialInstanceDynamic*>& MaterialCache,
 	const FFragImportResult& Result,
 	const FFragImportOptions& Options,
 	UMaterialInterface* BaseMaterial,
 	UMaterialInterface* TranslucentMaterial,
 	UMaterialInterface* GlassMaterial,
-	TMap<uint32, UMaterialInstanceDynamic*>& MaterialCache,
 	int32& SpawnCount,
 	FScopedSlowTask* SlowTask
 )
@@ -322,7 +318,7 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 	{
 		for (const FFragSpatialNode& ChildNode : Node.Children)
 		{
-			SpawnHierarchyNode(ChildNode, ParentActor, InstancesByLocalId, StaticMeshCache, Result, Options, BaseMaterial, TranslucentMaterial, GlassMaterial, MaterialCache, SpawnCount, SlowTask);
+			SpawnHierarchyNode(ChildNode, ParentActor, InstancesByLocalId, StaticMeshCache, MaterialCache, Result, Options, BaseMaterial, TranslucentMaterial, GlassMaterial, SpawnCount, SlowTask);
 		}
 		return ParentActor;
 	}
@@ -357,7 +353,10 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 
 	// 1. Spawn an empty AActor folder for this spatial node
 	AActor* NodeActor = World->SpawnActor<AActor>(SpawnParams);
-	if (!NodeActor) return nullptr;
+	if (!NodeActor) 
+	{
+		return nullptr;
+	}
 
 	NodeActor->SetActorLabel(NodeLabel);
 
@@ -415,19 +414,49 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 			UStaticMeshComponent* SMC = SMA->GetStaticMeshComponent();
 			SMC->SetMobility(EComponentMobility::Static);
 
+			// Determine TargetMaterial first
+			UMaterialInterface* TargetMaterial = BaseMaterial;
+			bool bIsGlass = false;
+			float AdjustedOpacity = Inst->Opacity;
+
+			bool bIsBlueColor = (Inst->Color.B > Inst->Color.R + 0.15f && Inst->Color.B > Inst->Color.G + 0.05f);
+
+			if (Inst->Opacity < 0.99f || bIsBlueColor)
+			{
+				if (bIsBlueColor || Inst->Opacity < 0.5f)
+				{
+					TargetMaterial = GlassMaterial;
+					bIsGlass = true;
+					if (Inst->Opacity > 0.99f) AdjustedOpacity = 0.5f;
+				}
+				else
+				{
+					TargetMaterial = TranslucentMaterial;
+				}
+			}
+
 			// Get or build static mesh
 			UStaticMesh* StaticMesh = nullptr;
-			if (UStaticMesh** CachedMesh = StaticMeshCache.Find(Inst->GeometryIndex))
+			int64 Key = (static_cast<int64>(Inst->GeometryIndex) << 32) | static_cast<uint32>(Inst->MaterialIndex);
+			
+			FLinearColor CorrectedColor;
+			CorrectedColor.R = FMath::Pow(Inst->Color.R, 2.2f);
+			CorrectedColor.G = FMath::Pow(Inst->Color.G, 2.2f);
+			CorrectedColor.B = FMath::Pow(Inst->Color.B, 2.2f);
+			CorrectedColor.A = Inst->Color.A;
+			
+			if (UStaticMesh** CachedMesh = StaticMeshCache.Find(Key))
 			{
 				StaticMesh = *CachedMesh;
 			}
 			else if (Inst->GeometryIndex >= 0 && Inst->GeometryIndex < Result.Geometries.Num())
 			{
-				FString MeshNameStr = FString::Printf(TEXT("SM_FragGeom_%d"), Inst->GeometryIndex);
-				StaticMesh = FFragMeshBuilder::BuildStaticMesh(Result.Geometries[Inst->GeometryIndex], this, FName(*MeshNameStr));
+				FString MeshNameStr = FString::Printf(TEXT("SM_FragGeom_%d_Mat_%d"), Inst->GeometryIndex, Inst->MaterialIndex);
+				UMaterialInstanceDynamic* TargetMID = GetOrCreateMaterial(TargetMaterial, CorrectedColor, AdjustedOpacity, Inst->bDoubleSided, MaterialCache, bIsGlass);
+				StaticMesh = FFragMeshBuilder::BuildStaticMesh(this, Result.Geometries[Inst->GeometryIndex], *MeshNameStr, CorrectedColor, AdjustedOpacity, TargetMID);
 				if (StaticMesh)
 				{
-					StaticMeshCache.Add(Inst->GeometryIndex, StaticMesh);
+					StaticMeshCache.Add(Key, StaticMesh);
 				}
 			}
 
@@ -436,30 +465,30 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 				SMC->SetStaticMesh(StaticMesh);
 				SMA->SetActorTransform(Inst->Transform);
 				
-				UMaterialInterface* TargetMaterial = BaseMaterial;
-				bool bIsGlass = false;
-				float AdjustedOpacity = Inst->Opacity;
-
-				bool bIsBlueColor = (Inst->Color.B > Inst->Color.R + 0.15f && Inst->Color.B > Inst->Color.G + 0.05f);
-
-				if (Inst->Opacity < 0.99f || bIsBlueColor)
+				UMaterialInstanceDynamic* TargetMID = GetOrCreateMaterial(TargetMaterial, CorrectedColor, AdjustedOpacity, Inst->bDoubleSided, MaterialCache, bIsGlass);
+				SMC->SetMaterial(0, TargetMID);
+				
+				// User explicitly requested to go through ALL objects
+				SMC->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				SMC->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+				SMA->SetActorEnableCollision(false);
+				
+				// Only hide exact matches for abstract organizational volumes
+				bool bIsVolume = Inst->Category.Equals(TEXT("IfcSpace"), ESearchCase::IgnoreCase) || 
+								 Inst->Category.Equals(TEXT("IfcSite"), ESearchCase::IgnoreCase) ||
+								 Inst->Category.Equals(TEXT("IfcBuilding"), ESearchCase::IgnoreCase) ||
+								 Inst->Category.Equals(TEXT("IfcOpeningElement"), ESearchCase::IgnoreCase) ||
+								 Inst->Category.Equals(TEXT("IfcAnnotation"), ESearchCase::IgnoreCase) ||
+								 Inst->Category.Equals(TEXT("IfcOpening"), ESearchCase::IgnoreCase);
+								
+				if (bIsVolume)
 				{
-					if (bIsBlueColor && GlassMaterial)
-					{
-						TargetMaterial = GlassMaterial;
-						bIsGlass = true;
-						if (AdjustedOpacity >= 0.99f) AdjustedOpacity = 0.75f; 
-					}
-					else if (TranslucentMaterial)
-					{
-						TargetMaterial = TranslucentMaterial;
-					}
+					SMC->SetVisibility(false);
+					SMC->SetHiddenInGame(true);
 				}
-
-				UMaterialInstanceDynamic* MID = GetOrCreateMaterial(TargetMaterial, Inst->Color, AdjustedOpacity, Inst->bDoubleSided, MaterialCache, bIsGlass);
-				if (MID)
+				else if (bIsGlass)
 				{
-					SMC->SetMaterial(0, MID);
+					UE_LOG(LogFragmentsUE, Warning, TEXT("WINDOW DEBUG: Applied Glass Material to actor %s"), *SMA->GetName());
 				}
 			}
 			
@@ -480,7 +509,7 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 	// 3. Recursively spawn children under this node
 	for (const FFragSpatialNode& ChildNode : Node.Children)
 	{
-		SpawnHierarchyNode(ChildNode, NodeActor, InstancesByLocalId, StaticMeshCache, Result, Options, BaseMaterial, TranslucentMaterial, GlassMaterial, MaterialCache, SpawnCount, SlowTask);
+		SpawnHierarchyNode(ChildNode, NodeActor, InstancesByLocalId, StaticMeshCache, MaterialCache, Result, Options, BaseMaterial, TranslucentMaterial, GlassMaterial, SpawnCount, SlowTask);
 	}
 
 	return NodeActor;
