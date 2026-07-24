@@ -1,0 +1,33 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "FragmentsUE",
+	"Description": "Import ThatOpen .frag (Fragments 2.0) BIM files into Unreal Engine 5",
+	"Category": "BIM",
+	"CreatedBy": "Azif",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "FragmentsUE",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "FragmentsUEEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": true
+		}
+	]
+}

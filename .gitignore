@@ -1,0 +1,20 @@
+# Visual Studio and IDEs
+.vs/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+.idea/
+*.sln.DotSettings.user
+
+# Unreal Engine generated and built files
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+
+# OS generated files
+.DS_Store
+Thumbs.db
