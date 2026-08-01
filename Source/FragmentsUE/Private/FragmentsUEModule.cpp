@@ -1,4 +1,4 @@
-// Copyright Azif. All Rights Reserved.
+// Copyright (c) 2026 Mohammed Azif. Licensed under the MIT License — see the LICENSE file.
 
 #include "FragmentsUEModule.h"
 
@@ -8,12 +8,10 @@ DEFINE_LOG_CATEGORY(LogFragmentsUE);
 
 void FFragmentsUEModule::StartupModule()
 {
-	UE_LOG(LogFragmentsUE, Log, TEXT("FragmentsUE v0.1.0: Module loaded"));
 }
 
 void FFragmentsUEModule::ShutdownModule()
 {
-	UE_LOG(LogFragmentsUE, Log, TEXT("FragmentsUE: Module unloaded"));
 }
 
 #undef LOCTEXT_NAMESPACE

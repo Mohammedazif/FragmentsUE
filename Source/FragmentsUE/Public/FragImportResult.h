@@ -1,8 +1,9 @@
-// Copyright Azif. All Rights Reserved.
+// Copyright (c) 2026 Mohammed Azif. Licensed under the MIT License — see the LICENSE file.
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "FragMetadata.h"
 #include "FragImportResult.generated.h"
 
 /**
@@ -109,6 +110,27 @@ struct FRAGMENTSUE_API FFragImportResult
 	/** All unique categories found in the file. */
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	TArray<FString> Categories;
+
+	/**
+	 * IFC metadata for every item in the file, indexed directly by LocalId
+	 * (the array is parallel to the model's local_ids). Empty when metadata
+	 * import is disabled.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
+	TArray<FFragItemMetadata> Items;
+
+	/**
+	 * Model-level header as an item record: IFC schema, authoring tool, export
+	 * timestamp, project / site / building names and the unit assignment.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
+	FFragItemMetadata ModelInfo;
+
+	/** Metadata for one item, or null when the id is unknown or metadata was not imported. */
+	const FFragItemMetadata* FindItem(int32 LocalId) const
+	{
+		return Items.IsValidIndex(LocalId) ? &Items[LocalId] : nullptr;
+	}
 
 	// --- Validation stats ---
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")

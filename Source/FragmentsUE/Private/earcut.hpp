@@ -1,3 +1,25 @@
+// earcut.hpp - polygon triangulation
+// https://github.com/mapbox/earcut.hpp
+//
+// ISC License
+//
+// Copyright (c) 2015, Mapbox
+//
+// Permission to use, copy, modify, and/or distribute this software for any purpose
+// with or without fee is hereby granted, provided that the above copyright notice
+// and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+// FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+// OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+// TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+// THIS SOFTWARE.
+//
+// Modified for FragmentsUE: the unused Delaunay refinement pass (detail::Refiner
+// and mapbox::refine) has been removed. See ThirdParty/LICENSES.md.
+
 #pragma once
 
 #include <algorithm>
@@ -19,7 +41,7 @@ struct nth {
     inline static typename std::tuple_element<I, T>::type get(const T& t) { return std::get<I>(t); };
 };
 
-} // namespace util
+}
 
 namespace detail {
 
@@ -29,13 +51,32 @@ public:
     std::vector<N> indices;
     std::size_t vertices = 0;
 
+    // ── Local addition (FragmentsUE) ─────────────────────────────────────────
+    // Shared allowance, counted in inner-loop steps. Untrusted geometry can drive
+    // splitEarcut's nested diagonal search — whose validity test walks the whole
+    // ring — into O(n^3). No cap on ring size can bound that once the file also
+    // controls how many faces there are, so the allowance is threaded in from the
+    // caller and shared across every face in the model. When it runs out the
+    // solver stops where it stands and returns what it has; the caller treats a
+    // short result the same way it treats any other triangulation failure.
+    // Null means unlimited, which is upstream behaviour.
+    std::int64_t* workBudget = nullptr;
+    bool budgetExhausted = false;
+
     template <typename Polygon>
     void operator()(const Polygon& points);
 
 private:
+    // Returns false once the allowance is spent, at which point every loop that
+    // consults it unwinds.
+    inline bool spendWork(std::int64_t units) {
+        if (!workBudget) return true;
+        *workBudget -= units;
+        if (*workBudget <= 0) { budgetExhausted = true; return false; }
+        return true;
+    }
+
     struct Node {
-        // i is a (bits(N)-1)-wide field packed alongside the 1-bit steiner flag; mask index to that
-        // width so it fits without a narrowing warning (a no-op for any real vertex index).
         Node(N index, double x_, double y_)
             : x(x_), y(y_), i(index & ((N(1) << (sizeof(N) * 8 - 1)) - 1)), steiner(0) {}
         Node(const Node&) = delete;
@@ -46,31 +87,23 @@ private:
         const double x;
         const double y;
 
-        // previous and next vertice nodes in a polygon ring
         Node* prev = nullptr;
         Node* next = nullptr;
 
-        // z-order curve value
         int32_t z = 0;
 
-        // original index in polygon
         const N i : (sizeof(N) * 8 - 1);
 
-        // indicates whether this is a steiner point
         N steiner : 1;
 
-        // previous and next nodes in z-order
         Node* prevZ = nullptr;
         Node* nextZ = nullptr;
     };
 
-    // Cache-optimized Triangle structure for repeated geometric tests
     struct Triangle {
         const double ax, ay;
         const double bx, by;
         const double cx, cy;
-        // triangle bounding box, used to cheaply reject most candidate points before the
-        // full point-in-triangle test (which is 6 multiplies)
         const double minX, minY, maxX, maxY;
 
         Triangle(const Node* a, const Node* b, const Node* c)
@@ -94,7 +127,6 @@ private:
                    (bx - px) * (cy - py) >= (cx - px) * (by - py);
         }
 
-        // as containsPoint, but false when the point coincides with the triangle's first vertex (a)
         inline bool containsPointExceptFirst(double px, double py) const {
             return !(ax == px && ay == py) && containsPoint(px, py);
         }
@@ -137,8 +169,6 @@ private:
     void removeNode(Node* p);
 
     bool hashing;
-    // set by filterPoints whenever it removes at least one node; read by earcutLinked's stall
-    // handler to decide whether another clip pass is worth attempting before the costlier stages
     bool filteredOut = false;
     double minX, maxX;
     double minY, maxY;
@@ -153,14 +183,11 @@ private:
         ~ObjectPool() { clear(); }
         template <typename... Args>
         T* construct(Args&&... args) {
-            // If current block is full, move to next block or allocate new one
             if (currentIndex >= baseBlockSize) {
                 currentBlockIndex++;
                 if (currentBlockIndex < memoryBlocks.size()) {
-                    // Reuse existing block
                     currentIndex = 0;
                 } else {
-                    // Allocate a new one
                     allocateNewBlock();
                 }
             }
@@ -172,11 +199,9 @@ private:
             return object;
         }
         void clear() {
-            // Destroy all objects, but keep blocks allocated for reuse
             std::size_t objectsDestroyed = 0;
             for (std::size_t blockIdx = 0; blockIdx < memoryBlocks.size() && objectsDestroyed < totalObjects;
                  ++blockIdx) {
-                // check if we are in the last block
                 std::size_t objectsInThisBlock = std::min(baseBlockSize, totalObjects - objectsDestroyed);
                 for (std::size_t i = 0; i < objectsInThisBlock; ++i) {
                     T* object = memoryBlocks[blockIdx].get() + i;
@@ -184,7 +209,6 @@ private:
                 }
                 objectsDestroyed += objectsInThisBlock;
             }
-            // Reset to start from first block again
             currentBlockIndex = 0;
             currentIndex = 0;
             totalObjects = 0;
@@ -194,7 +218,6 @@ private:
         Alloc alloc;
         typedef typename std::allocator_traits<Alloc> alloc_traits;
 
-        // Custom deleter that uses the allocator
         struct AllocDeleter {
             Alloc alloc;
             std::size_t capacity;
@@ -218,32 +241,19 @@ private:
 
     std::unique_ptr<ObjectPool<Node>> nodes;
     std::vector<Node*> holeQueue;
-    // reused scratch buffer for sortLinked: materialize the z-linked ring, std::sort, relink
     std::vector<Node*> sortBuffer;
 
-    // Block-bbox index for findHoleBridge (issue #183): one [minX,minY,maxX,maxY] bbox per K
-    // consecutive ring edges, so the leftward-ray scan can skip whole blocks in O(1) instead of
-    // walking the whole merged ring. Grown append-only — the outer ring seeds it, then each merged
-    // hole appends a segment (head node, stop node, K-blocks over head..stop); independent segments,
-    // not a ring tiling, since splices land mid-ring. Buffers reused/grown across calls.
-    //
-    // filterPoints only drops collinear/coincident points, so a stale bbox stays a conservative
-    // superset of its live edges (never a false skip); the scan skips dead nodes (p->prev->next != p)
-    // and lazily advances a dead head/stop. Blocks are scanned in append (not ring) order, so the
-    // chosen bridge can differ from the un-indexed code — a different but equally valid result.
-    static constexpr int32_t K = 16; // edges per block
-    std::vector<double> blockBBox;   // [minX,minY,maxX,maxY] per block
-    std::vector<Node*> blockHead;    // first node of each block's segment
-    std::vector<Node*> blockStop;    // node just past each block's segment (exclusive walk bound)
+    static constexpr int32_t K = 16;
+    std::vector<double> blockBBox;
+    std::vector<Node*> blockHead;
+    std::vector<Node*> blockStop;
     std::size_t numBlocks = 0;
-    // true only while eliminateHoles merges holes, so removeNode keeps the block index live (growBlock)
     bool indexActive = false;
 };
 
 template <typename N>
 template <typename Polygon>
 void Earcut<N>::operator()(const Polygon& points) {
-    // reset
     indices.clear();
     vertices = 0;
 
@@ -260,7 +270,6 @@ void Earcut<N>::operator()(const Polygon& points) {
         len += static_cast<std::size_t>(points[i].size());
     }
 
-    // estimate size of nodes and indices
     if (!nodes) {
         std::size_t estimatedNodes = len * 3 / 2;
         nodes = std::make_unique<ObjectPool<Node>>(std::max<std::size_t>(estimatedNodes, 256));
@@ -272,7 +281,6 @@ void Earcut<N>::operator()(const Polygon& points) {
 
     if (points.size() > 1) outerNode = eliminateHoles(points, outerNode);
 
-    // if the shape is not too simple, we'll use z-order curve hash later; calculate polygon bbox
     hashing = threshold < 0;
     if (hashing) {
         Node* p = outerNode->next;
@@ -288,7 +296,6 @@ void Earcut<N>::operator()(const Polygon& points) {
             p = p->next;
         } while (p != outerNode);
 
-        // minX, minY and inv_size are later used to transform coords into integers for z-order calculation
         inv_size = std::max<double>(maxX - minX, maxY - minY);
         inv_size = inv_size != .0 ? (32767. / inv_size) : .0;
     }
@@ -299,7 +306,6 @@ void Earcut<N>::operator()(const Polygon& points) {
     holeQueue.clear();
 }
 
-// create a circular doubly linked list from polygon points in the specified winding order
 template <typename N>
 template <typename Ring>
 typename Earcut<N>::Node* Earcut<N>::linkedList(const Ring& points, const bool clockwise) {
@@ -382,6 +388,7 @@ void Earcut<N>::earcutLinked(Node* ear) {
 
     // iterate through ears, slicing them one by one
     while (ear->prev != ear->next) {
+        if (!spendWork(1)) return;
         prev = ear->prev;
         next = ear->next;
 
@@ -523,6 +530,7 @@ void Earcut<N>::splitEarcut(Node* start) {
     do {
         Node* b = a->next->next;
         while (b != a->prev) {
+            if (!spendWork(1)) return;
             if (a->i != b->i && isValidDiagonal(a, b)) {
                 // split the polygon in two by the diagonal
                 Node* c = splitPolygon(a, b);
@@ -924,6 +932,11 @@ bool Earcut<N>::intersectsPolygon(const Node* a, const Node* b) {
 
     const Node* p = a;
     do {
+        // This walk is the O(n) factor inside splitEarcut's O(n^2) search, so it is
+        // where the cubic term actually accrues. Rejecting the diagonal on
+        // exhaustion is the conservative answer: it cannot invent a bad split, and
+        // splitEarcut's own check unwinds on the next step.
+        if (!spendWork(1)) return true;
         const Node* n = p->next;
         if ((p->x > diagMaxX && n->x > diagMaxX) || (p->x < diagMinX && n->x < diagMinX) ||
             (p->y > diagMaxY && n->y > diagMaxY) || (p->y < diagMinY && n->y < diagMinY)) {
@@ -1025,183 +1038,15 @@ std::vector<N> earcut(const Polygon& poly) {
     return std::move(earcut.indices);
 }
 
-namespace detail {
-
-// Refine a triangulation toward the constrained Delaunay triangulation by legalizing every interior
-// edge in place with Lawson flips — maximizing the minimum angle and removing most slivers. Adapted
-// from delaunator's edge legalization. Uses non-robust predicates: float input is fine, and the
-// worst case is a not-quite-Delaunay edge, never an invalid mesh. Ported from earcut v3.2.3.
-template <typename N>
-class Refiner {
-public:
-    // triangles: triangle indices as returned by earcut, mutated in place.
-    // coords: random-access container of points, indexed by vertex index (coords[i] -> point i),
-    // read through the same util::nth<0>/<1> accessors as earcut's input.
-    template <typename Coords>
-    void operator()(std::vector<N>& triangles, const Coords& coords) {
-        using Point = typename std::decay<decltype(coords[0])>::type;
-        const int n = static_cast<int>(triangles.size());
-        if (n < 6) return;
-        ensureScratch(static_cast<std::size_t>(n));
-        gen++; // bumping the generation logically empties the hash (no clearing)
-        std::fill(heVec.begin(), heVec.begin() + n, -1);
-
-        // Raw pointers into the scratch: indexed by the int/uint half-edge and hash indices below,
-        // where operator[]'s size_type would trip -Wsign-conversion on every subscript.
-        N* t = triangles.data();
-        int32_t* he = heVec.data();
-        int32_t* edgeStack = edgeStackVec.data();
-        int32_t* hTable = hTableVec.data();
-        uint32_t* hStamp = hStampVec.data();
-        uint8_t* edgeStamp = edgeStampVec.data();
-
-        auto X = [&](N p) -> double { return static_cast<double>(util::nth<0, Point>::get(coords[p])); };
-        auto Y = [&](N p) -> double { return static_cast<double>(util::nth<1, Point>::get(coords[p])); };
-
-        // Build half-edge twins with an undirected-edge hash; consumed slots mark linked pairs. As
-        // each pair is linked we seed the stack with one representative (s, the earlier-inserted
-        // edge) — this fuses the initial "push every interior edge" pass into the build, saving a
-        // full O(n) scan. edgeStamp is all-zero here (balanced push/pop leaves it clean) and each
-        // pair links once, so the seed write needs no dedup guard.
-        int i = 0;
-        for (int e = 0; e < n; e++) {
-            const N a = t[e], b = t[nextHE(e)];
-            const N lo = a < b ? a : b, hi = a < b ? b : a;
-            uint32_t h = (uint32_t(lo) * 0x9e3779b1u ^ uint32_t(hi) * 0x85ebca6bu) & hMask;
-            while (hStamp[h] == gen) {
-                const int32_t s = hTable[h];
-                // s == -1 marks a consumed slot (a pair already linked) — skip past it
-                if (s != -1) {
-                    const N sa = t[s], sb = t[nextHE(s)];
-                    if ((sa == lo && sb == hi) || (sa == hi && sb == lo)) {
-                        he[e] = s;
-                        he[s] = e;
-                        hTable[h] = -1; // link, then consume the slot
-                        edgeStamp[s] = 1;
-                        edgeStack[i++] = s; // seed the interior edge for the cascade
-                        break;
-                    }
-                }
-                h = (h + 1) & hMask;
-            }
-            if (hStamp[h] != gen) {
-                hTable[h] = e;
-                hStamp[h] = gen;
-            } // first occurrence: insert
-        }
-
-        while (i > 0) {
-            const int a = edgeStack[--i];
-            edgeStamp[a] = 0;
-            const int b = he[a];
-            if (b == -1) continue;
-
-            const int a0 = a - a % 3;
-            const int b0 = b - b % 3;
-            const int ar = a0 + (a + 2) % 3;
-            const int al = a0 + (a + 1) % 3;
-            const int bl = b0 + (b + 2) % 3;
-            const int br = b0 + (b + 1) % 3;
-            const N p0 = t[ar], pr = t[a], pl = t[al], p1 = t[bl];
-
-            const double x0 = X(p0), y0 = Y(p0);
-            const double xr = X(pr), yr = Y(pr);
-            const double xl = X(pl), yl = Y(pl);
-            const double x1 = X(p1), y1 = Y(p1);
-
-            // Test inCircle first: most interior edges are already Delaunay (inCircle true → no
-            // flip), so this short-circuits before the two convexity orients on the common path. The
-            // quad must also be convex (both new triangles CCW) — flipping a reflex quad would push
-            // a triangle outside the polygon. Boundary/hole edges self-protect via he == -1.
-            if (!inCircle(x0, y0, xr, yr, xl, yl, x1, y1) && orient(x0, y0, xr, yr, x1, y1) > 0 &&
-                orient(x0, y0, x1, y1, xl, yl) > 0) {
-                t[a] = p1;
-                t[b] = p0;
-                const int32_t hbl = he[bl], har = he[ar];
-                he[a] = hbl;
-                if (hbl != -1) he[hbl] = a;
-                he[b] = har;
-                if (har != -1) he[har] = b;
-                he[ar] = bl;
-                he[bl] = ar;
-
-                // re-check the quad's four outer edges; skip boundary edges (he == -1) and any
-                // already queued (edgeStamp), which also keeps the stack bounded by n.
-                if (hbl != -1 && edgeStamp[a] == 0) {
-                    edgeStamp[a] = 1;
-                    edgeStack[i++] = a;
-                }
-                if (har != -1 && edgeStamp[b] == 0) {
-                    edgeStamp[b] = 1;
-                    edgeStack[i++] = b;
-                }
-                if (he[al] != -1 && edgeStamp[al] == 0) {
-                    edgeStamp[al] = 1;
-                    edgeStack[i++] = al;
-                }
-                if (he[br] != -1 && edgeStamp[br] == 0) {
-                    edgeStamp[br] = 1;
-                    edgeStack[i++] = br;
-                }
-            }
-        }
-    }
-
-private:
-    // Reusable scratch, grown on demand like earcut's z-order arrays and reused across calls:
-    //   he      = twin half-edge of each edge, or -1 on the polygon boundary
-    //   hTable  = open-addressing hash, slot -> half-edge index, valid iff hStamp[slot] == gen
-    //   edgeStamp = pending-in-stack flag, cleared when the edge is popped
-    std::vector<int32_t> heVec, edgeStackVec, hTableVec;
-    std::vector<uint32_t> hStampVec;
-    std::vector<uint8_t> edgeStampVec;
-    uint32_t hMask = 0, gen = 0;
-
-    static int nextHE(int e) { return e - e % 3 + (e + 1) % 3; } // next half-edge in same triangle
-
-    static double orient(double ax, double ay, double bx, double by, double cx, double cy) {
-        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    }
-
-    // Whether p is inside or exactly on the circumcircle of triangle (a, b, c). Sign is negated vs
-    // the usual predicate to match earcut's CCW winding — the standard sign builds the anti-Delaunay
-    // mesh. Cocircular quads are legal ties, so refine only flips when this returns false.
-    static bool inCircle(double ax, double ay, double bx, double by, double cx, double cy, double px, double py) {
-        const double dx = ax - px, dy = ay - py, ex = bx - px, ey = by - py, fx = cx - px, fy = cy - py;
-        const double ap = dx * dx + dy * dy, bp = ex * ex + ey * ey, cp = fx * fx + fy * fy;
-        // A near-cocircular quad is a legal Delaunay tie, but roundoff can flag both an edge and its
-        // flip as illegal, cascading into an endless flip loop (#205) — so treat a determinant
-        // within a small margin of zero as a tie. The determinant's worst-case roundoff error is
-        // provably below 9e-16·(ap+bp+cp)² (Shewchuk-style bound), so the margin guarantees every
-        // executed flip is illegal in exact arithmetic, and Lawson flipping always terminates.
-        const double s = ap + bp + cp;
-        return dx * (ey * cp - bp * fy) - dy * (ex * cp - bp * fx) + ap * (ex * fy - ey * fx) <= 1e-13 * s * s;
-    }
-
-    void ensureScratch(std::size_t n) {
-        // edgeStack holds at most one entry per half-edge (edgeStamp dedups), so n is a safe cap.
-        if (edgeStackVec.size() < n) edgeStackVec.resize(n);
-        if (heVec.size() < n) heVec.resize(n);
-        if (edgeStampVec.size() < n) edgeStampVec.resize(n, 0);
-        std::size_t size = 1;
-        while (size < n * 4) size <<= 1; // power-of-two table, load factor <= 0.25
-        if (hTableVec.size() < size) {
-            hTableVec.resize(size);
-            hStampVec.resize(size, 0);
-        }
-        hMask = uint32_t(size) - 1;
-    }
-};
-
-} // namespace detail
-
-// Opt-in Delaunay-refinement post-pass for earcut() output (or any manifold triangle-index array).
-// Legalizes every interior edge in place with Lawson flips. See detail::Refiner. `coords` is a
-// random-access container of points indexed by vertex index; `triangles` is mutated in place.
-template <typename N, typename Coords>
-void refine(std::vector<N>& triangles, const Coords& coords) {
-    static thread_local mapbox::detail::Refiner<N> refiner;
-    refiner(triangles, coords);
+// Local addition (FragmentsUE): same call, drawing on a caller-owned work
+// allowance shared across every face of a model. See Earcut::workBudget.
+template <typename N = uint32_t, typename Polygon>
+std::vector<N> earcut(const Polygon& poly, std::int64_t* workBudget, bool& outBudgetExhausted) {
+    mapbox::detail::Earcut<N> earcut;
+    earcut.workBudget = workBudget;
+    earcut(poly);
+    outBudgetExhausted = earcut.budgetExhausted;
+    return std::move(earcut.indices);
 }
 
 } // namespace mapbox

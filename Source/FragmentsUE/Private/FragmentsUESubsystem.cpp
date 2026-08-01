@@ -1,4 +1,4 @@
-// Copyright Azif. All Rights Reserved.
+// Copyright (c) 2026 Mohammed Azif. Licensed under the MIT License — see the LICENSE file.
 
 #include "FragmentsUESubsystem.h"
 #include "FragmentsActor.h"
@@ -40,7 +40,6 @@ void UFragmentsUESubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		}
 	);
 
-	UE_LOG(LogFragmentsUE, Log, TEXT("FragmentsUE subsystem initialized. Use 'FragmentsUE.Import <path>' to test."));
 }
 
 void UFragmentsUESubsystem::Deinitialize()
@@ -77,69 +76,15 @@ void UFragmentsUESubsystem::HandleParseCommand(const TArray<FString>& Args)
 		FilePath += TEXT(" ") + Args[i];
 	}
 
-	UE_LOG(LogFragmentsUE, Log, TEXT("═══════════════════════════════════════════════════"));
-	UE_LOG(LogFragmentsUE, Log, TEXT("  FragmentsUE.Parse: %s"), *FilePath);
-	UE_LOG(LogFragmentsUE, Log, TEXT("═══════════════════════════════════════════════════"));
-
 	FFragImportOptions Options;
 	FFragImportResult Result = FFragParser::LoadFromFile(FilePath, Options);
 
 	if (Result.bSuccess)
 	{
-		UE_LOG(LogFragmentsUE, Log, TEXT("Parse SUCCEEDED"));
-
-		// Log some instance details for debugging
-		int32 LogCount = FMath::Min(Result.Instances.Num(), 10);
-		for (int32 i = 0; i < LogCount; i++)
-		{
-			const auto& Inst = Result.Instances[i];
-			UE_LOG(LogFragmentsUE, Log,
-				TEXT("  Instance[%d]: LocalId=%d, GUID=%s, GeomIdx=%d, MatIdx=%d, Pos=(%s)"),
-				i, Inst.LocalId, *Inst.GUID, Inst.GeometryIndex, Inst.MaterialIndex,
-				*Inst.Transform.GetTranslation().ToString());
-		}
-		if (Result.Instances.Num() > 10)
-		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("  ... (%d more instances)"),
-				Result.Instances.Num() - 10);
-		}
-
-		// Log geometry details
-		int32 GeomLogCount = FMath::Min(Result.Geometries.Num(), 10);
-		for (int32 i = 0; i < GeomLogCount; i++)
-		{
-			const auto& Geom = Result.Geometries[i];
-			UE_LOG(LogFragmentsUE, Log,
-				TEXT("  Geometry[%d]: %d verts, %d tris"),
-				i, Geom.Positions.Num(), Geom.Indices.Num() / 3);
-		}
-		if (Result.Geometries.Num() > 10)
-		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("  ... (%d more geometries)"),
-				Result.Geometries.Num() - 10);
-		}
-
-		// Log categories
-		for (const FString& Cat : Result.Categories)
-		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("  Category: %s"), *Cat);
-		}
-
-		// Log spatial structure (top 2 levels)
-		if (Result.SpatialRoot.Children.Num() > 0)
-		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("  Spatial Structure:"));
-			for (const auto& Child : Result.SpatialRoot.Children)
-			{
-				UE_LOG(LogFragmentsUE, Log, TEXT("    [%d] %s (%d children)"),
-					Child.LocalId, *Child.Category, Child.Children.Num());
-				for (const auto& GrandChild : Child.Children)
-				{
-					UE_LOG(LogFragmentsUE, Log, TEXT("      [%d] %s (%d children)"),
-						GrandChild.LocalId, *GrandChild.Category, GrandChild.Children.Num());
-				}
-			}
-		}
+		UE_LOG(LogFragmentsUE, Display, TEXT("%s: %d geometries, %d instances, %d elements, %d categories, %d metadata items"),
+			*FPaths::GetCleanFilename(FilePath),
+			Result.Geometries.Num(), Result.Instances.Num(), Result.TotalElements,
+			Result.Categories.Num(), Result.Items.Num());
 	}
 	else
 	{
@@ -257,9 +202,8 @@ void UFragmentsUESubsystem::HandleImportCommand(const TArray<FString>& Args)
 	}
 
 	FFragImportOptions Options;
-	Options.MeshMode = EFragMeshMode::Static; // Default to Static Mesh for now
 	Options.ScaleFactor = 100.0f; // Default scale
-	Options.bImportAsHierarchy = bHierarchy;
+	Options.ImportMode = bHierarchy ? EFragImportMode::HierarchyPerBody : EFragImportMode::Instanced;
 
 	// Load the default base material from the plugin's content folder
 	UMaterialInterface* BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/FragmentsUE/M_FragBase.M_FragBase"));
@@ -269,9 +213,5 @@ void UFragmentsUESubsystem::HandleImportCommand(const TArray<FString>& Args)
 		BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	}
 
-	AFragmentsActor* Actor = SpawnFragmentsActor(World, FilePath, Options, BaseMaterial);
-	if (Actor)
-	{
-		UE_LOG(LogFragmentsUE, Log, TEXT("FragmentsUE.Import: Spawned actor %s successfully."), *Actor->GetName());
-	}
+	SpawnFragmentsActor(World, FilePath, Options, BaseMaterial);
 }

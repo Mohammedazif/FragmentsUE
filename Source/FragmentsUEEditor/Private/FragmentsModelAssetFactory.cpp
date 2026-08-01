@@ -1,4 +1,4 @@
-// Copyright Azif. All Rights Reserved.
+// Copyright (c) 2026 Mohammed Azif. Licensed under the MIT License — see the LICENSE file.
 
 #include "FragmentsModelAssetFactory.h"
 #include "FragmentsModelAsset.h"

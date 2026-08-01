@@ -28,7 +28,15 @@ public class FragmentsUE : ModuleRules
 		{
 			"ProceduralMeshComponent",
 			"RenderCore",
-			"zlib"
+			"zlib",
+			"Json"   // parses the .frag model header (IFC schema, authoring tool)
 		});
+
+		// Writing generated meshes and materials into the Content Browser is an
+		// editor-only stage; packaged builds keep everything transient.
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.Add("AssetRegistry");
+		}
 	}
 }

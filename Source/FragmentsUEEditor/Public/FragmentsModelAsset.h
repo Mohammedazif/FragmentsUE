@@ -1,9 +1,10 @@
-// Copyright Azif. All Rights Reserved.
+// Copyright (c) 2026 Mohammed Azif. Licensed under the MIT License — see the LICENSE file.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
+#include "FragImportOptions.h"
 #include "FragmentsModelAsset.generated.h"
 
 /**
@@ -20,4 +21,8 @@ public:
 	/** The absolute path to the .frag file on disk */
 	UPROPERTY(VisibleAnywhere, Category = "FragmentsUE")
 	FString SourceFilePath;
+
+	/** Options for importing this specific model */
+	UPROPERTY(EditAnywhere, Category = "FragmentsUE")
+	FFragImportOptions ImportOptions;
 };

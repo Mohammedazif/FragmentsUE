@@ -1,4 +1,4 @@
-// Copyright Azif. All Rights Reserved.
+// Copyright (c) 2026 Mohammed Azif. Licensed under the MIT License — see the LICENSE file.
 
 #pragma once
 
@@ -19,4 +19,5 @@ public:
 
 	virtual bool CanCreateActorFrom(const FAssetData& AssetData, FText& OutErrorMsg) override;
 	virtual void PostSpawnActor(UObject* Asset, AActor* NewActor) override;
+	virtual FString GetDefaultActorLabel(UObject* Asset) const override;
 };

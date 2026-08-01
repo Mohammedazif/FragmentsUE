@@ -1,5 +1,17 @@
 #include "FragmentsUEEditorModule.h"
 #include "FragmentsUEModule.h"
+#include "FragmentsMetadataDetails.h"
+#include "SFragmentsFilterPanel.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/Docking/TabManager.h"
+#include "Widgets/Docking/SDockTab.h"
+#include "WorkspaceMenuStructure.h"
+#include "WorkspaceMenuStructureModule.h"
+#include "Styling/AppStyle.h"
+#include "FragmentsMetadataComponent.h"
+#include "FragmentsElementActor.h"
+#include "FragmentsActor.h"
+#include "PropertyEditorModule.h"
 #include "Factories/MaterialFactoryNew.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
@@ -10,10 +22,15 @@
 #include "Materials/MaterialExpressionVertexColor.h"
 #include "Materials/MaterialExpressionComponentMask.h"
 #include "Containers/Ticker.h"
+#include "UObject/StrongObjectPtr.h"
 
-void FFragmentsUEEditorModule::GenerateMaterials()
+void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 {
-	UMaterialFactoryNew* MaterialFactory = NewObject<UMaterialFactoryNew>();
+	// Rooted for the duration. A raw local is invisible to the GC, and now that an
+	// existing material short-circuits its block, the gap between construction here and
+	// the first use can span two LoadObject calls that page packages in from disk — any
+	// collection in that window would leave this dangling.
+	TStrongObjectPtr<UMaterialFactoryNew> MaterialFactory(NewObject<UMaterialFactoryNew>());
 
 		// 1. Generate Opaque Material
 		FString PackageName = TEXT("/FragmentsUE/M_FragBase");
@@ -21,19 +38,22 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 		
 		UMaterial* BaseMaterialObj = LoadObject<UMaterial>(nullptr, *(PackageName + TEXT(".") + MaterialName));
 		UPackage* Package = nullptr;
-		if (BaseMaterialObj)
+		const bool bBaseExisted = BaseMaterialObj != nullptr;
+		if (bBaseExisted)
 		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("M_FragBase exists, updating it..."));
 			Package = BaseMaterialObj->GetOutermost();
 		}
 		else
 		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("Auto-generating default material..."));
 			Package = CreatePackage(*PackageName);
 			BaseMaterialObj = (UMaterial*)MaterialFactory->FactoryCreateNew(UMaterial::StaticClass(), Package, FName(*MaterialName), RF_Public | RF_Standalone, nullptr, GWarn);
 		}
 
-		if (BaseMaterialObj)
+		// The block below empties the expression graph, rebuilds it from the hardcoded
+		// layout and saves over the package. Running that on a material the user has
+		// since edited throws their work away with no prompt and no undo, so an
+		// existing material is only rebuilt when asked for by name.
+		if ((!bBaseExisted || bForceRebuild) && BaseMaterialObj)
 		{
 			BaseMaterialObj->bUsedWithInstancedStaticMeshes = true;
 			BaseMaterialObj->BlendMode = BLEND_Opaque;
@@ -97,7 +117,6 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 			SaveArgs.Error = GWarn;
 			UPackage::SavePackage(Package, BaseMaterialObj, *PackageFileName, SaveArgs);
 
-			UE_LOG(LogFragmentsUE, Log, TEXT("Auto-generated M_FragBase successfully at %s"), *PackageFileName);
 		}
 
 		// 2. Generate Translucent Material
@@ -106,19 +125,18 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 		
 		UMaterial* TransMaterialObj = LoadObject<UMaterial>(nullptr, *(TranslucentPackageName + TEXT(".") + TranslucentMaterialName));
 		UPackage* TransPackage = nullptr;
-		if (TransMaterialObj)
+		const bool bTransExisted = TransMaterialObj != nullptr;
+		if (bTransExisted)
 		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("M_FragBase_Translucent exists, updating it..."));
 			TransPackage = TransMaterialObj->GetOutermost();
 		}
 		else
 		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("Auto-generating translucent material..."));
 			TransPackage = CreatePackage(*TranslucentPackageName);
 			TransMaterialObj = (UMaterial*)MaterialFactory->FactoryCreateNew(UMaterial::StaticClass(), TransPackage, FName(*TranslucentMaterialName), RF_Public | RF_Standalone, nullptr, GWarn);
 		}
 
-		if (TransMaterialObj)
+		if ((!bTransExisted || bForceRebuild) && TransMaterialObj)
 		{
 			TransMaterialObj->bUsedWithInstancedStaticMeshes = true;
 			TransMaterialObj->BlendMode = BLEND_Translucent;
@@ -183,7 +201,6 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 			SaveArgs.Error = GWarn;
 			UPackage::SavePackage(TransPackage, TransMaterialObj, *TransPackageFileName, SaveArgs);
 
-			UE_LOG(LogFragmentsUE, Log, TEXT("Auto-generated M_FragBase_Translucent successfully at %s"), *TransPackageFileName);
 		}
 
 		// 3. Generate Glass Material (Specific for Glass/Windows)
@@ -192,19 +209,18 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 		
 		UMaterial* GlassMaterialObj = LoadObject<UMaterial>(nullptr, *(GlassPackageName + TEXT(".") + GlassMaterialName));
 		UPackage* GlassPackage = nullptr;
-		if (GlassMaterialObj)
+		const bool bGlassExisted = GlassMaterialObj != nullptr;
+		if (bGlassExisted)
 		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("M_FragBase_Glass exists, updating it..."));
 			GlassPackage = GlassMaterialObj->GetOutermost();
 		}
 		else
 		{
-			UE_LOG(LogFragmentsUE, Log, TEXT("Auto-generating glass material..."));
 			GlassPackage = CreatePackage(*GlassPackageName);
 			GlassMaterialObj = (UMaterial*)MaterialFactory->FactoryCreateNew(UMaterial::StaticClass(), GlassPackage, FName(*GlassMaterialName), RF_Public | RF_Standalone, nullptr, GWarn);
 		}
 
-		if (GlassMaterialObj)
+		if ((!bGlassExisted || bForceRebuild) && GlassMaterialObj)
 		{
 			GlassMaterialObj->bUsedWithInstancedStaticMeshes = true;
 			GlassMaterialObj->BlendMode = BLEND_Translucent;
@@ -282,30 +298,118 @@ void FFragmentsUEEditorModule::GenerateMaterials()
 			SaveArgs.Error = GWarn;
 			UPackage::SavePackage(GlassPackage, GlassMaterialObj, *GlassPackageFileName, SaveArgs);
 
-			UE_LOG(LogFragmentsUE, Log, TEXT("Auto-generated M_FragBase_Glass successfully at %s"), *GlassPackageFileName);
 	}
 }
 
 static FAutoConsoleCommand GCmdGenerateMaterial(
 	TEXT("FragmentsUE.GenerateMaterial"),
-	TEXT("Generates the default M_FragBase material in the plugin content folder"),
-	FConsoleCommandDelegate::CreateStatic(&FFragmentsUEEditorModule::GenerateMaterials)
+	TEXT("Rebuilds the M_FragBase materials in the plugin content folder, discarding any edits made to them"),
+	FConsoleCommandDelegate::CreateLambda([]()
+	{
+		// The only path that is allowed to overwrite an existing material, because it
+		// is the only one the user asks for by name.
+		FFragmentsUEEditorModule::GenerateMaterials(/*bForceRebuild*/ true);
+	})
 );
 
 void FFragmentsUEEditorModule::StartupModule()
 {
-	UE_LOG(LogFragmentsUE, Log, TEXT("FragmentsUEEditor: Module loaded."));
+	RegisterDetailCustomizations();
+
+	// The core ticker also runs inside commandlets, where this would mutate and save
+	// plugin content in the middle of a cook.
+	if (IsRunningCommandlet())
+	{
+		return;
+	}
+
+	// After the commandlet guard: a nomad tab needs the slate application, which a
+	// cook does not have.
+	RegisterFilterTab();
 
 	// Run material generation 3 seconds after module load so the editor and its validators are fully initialized
 	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([](float DeltaTime)
 	{
-		FFragmentsUEEditorModule::GenerateMaterials();
+		// Creates the materials on a fresh install and does nothing on every start
+		// after that — see the note on GenerateMaterials.
+		FFragmentsUEEditorModule::GenerateMaterials(/*bForceRebuild*/ false);
 		return false; // Run once
 	}), 3.0f);
 }
 
 void FFragmentsUEEditorModule::ShutdownModule()
 {
+	UnregisterDetailCustomizations();
+	UnregisterFilterTab();
+}
+
+#define LOCTEXT_NAMESPACE "FragmentsUEEditor"
+
+void FFragmentsUEEditorModule::RegisterFilterTab()
+{
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
+		SFragmentsFilterPanel::TabId,
+		FOnSpawnTab::CreateRaw(this, &FFragmentsUEEditorModule::SpawnFilterTab))
+		.SetDisplayName(LOCTEXT("FilterTabTitle", "IFC Filter"))
+		.SetTooltipText(LOCTEXT("FilterTabTooltip", "Isolate an imported BIM model by level, category or property."))
+		.SetGroup(WorkspaceMenu::GetMenuStructure().GetLevelEditorCategory())
+		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Layers"));
+}
+
+void FFragmentsUEEditorModule::UnregisterFilterTab()
+{
+	if (FSlateApplication::IsInitialized())
+	{
+		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(SFragmentsFilterPanel::TabId);
+	}
+}
+
+TSharedRef<SDockTab> FFragmentsUEEditorModule::SpawnFilterTab(const FSpawnTabArgs& Args)
+{
+	return SNew(SDockTab)
+		.TabRole(ETabRole::NomadTab)
+		[
+			SNew(SFragmentsFilterPanel)
+		];
+}
+
+#undef LOCTEXT_NAMESPACE
+
+void FFragmentsUEEditorModule::RegisterDetailCustomizations()
+{
+	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
+
+	// The metadata component renders the same way whether the user selects the
+	// component itself or the element / spatial node actor that owns it.
+	CustomizedClassNames = {
+		UFragmentsMetadataComponent::StaticClass()->GetFName(),
+		AFragmentsElementActor::StaticClass()->GetFName(),
+		AFragmentsNodeActor::StaticClass()->GetFName(),
+		AFragmentsActor::StaticClass()->GetFName()   // model header: schema, exporter, units
+	};
+
+	for (const FName& ClassName : CustomizedClassNames)
+	{
+		PropertyModule.RegisterCustomClassLayout(
+			ClassName,
+			FOnGetDetailCustomizationInstance::CreateStatic(&FFragmentsMetadataDetails::MakeInstance));
+	}
+
+	PropertyModule.NotifyCustomizationModuleChanged();
+}
+
+void FFragmentsUEEditorModule::UnregisterDetailCustomizations()
+{
+	if (FPropertyEditorModule* PropertyModule = FModuleManager::GetModulePtr<FPropertyEditorModule>("PropertyEditor"))
+	{
+		for (const FName& ClassName : CustomizedClassNames)
+		{
+			PropertyModule->UnregisterCustomClassLayout(ClassName);
+		}
+		PropertyModule->NotifyCustomizationModuleChanged();
+	}
+
+	CustomizedClassNames.Empty();
 }
 
 IMPLEMENT_MODULE(FFragmentsUEEditorModule, FragmentsUEEditor)
