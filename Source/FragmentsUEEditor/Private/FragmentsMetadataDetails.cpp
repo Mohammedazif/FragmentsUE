@@ -47,19 +47,10 @@ namespace
 		];
 	}
 
-	/**
-	 * Every row below is a live STextBlock plus a full SEditableTextBox, constructed
-	 * eagerly while the layout is built — several kilobytes of Slate for what may be a
-	 * fifteen-byte tuple in the file. Selecting one element must not be able to spend
-	 * minutes and gigabytes building widgets nobody will scroll to. The Details panel
-	 * is not the export path; Copy All to Clipboard and the Blueprint metadata API are,
-	 * and both still see everything. These caps sit far above what any real IFC element
-	 * carries — Pset_WallCommon has eight properties, not two hundred.
-	 */
+	// Caps eager widget building; 200/100 far exceeds any real IFC element and avoids editor hangs.
 	constexpr int32 MaxRowsPerGroup = 200;
 	constexpr int32 MaxPropertySetGroups = 100;
 
-	/** Closing row of a group that was cut short, so the omission is never silent. */
 	void FillOverflowRow(FDetailWidgetRow& Row, int32 HiddenCount)
 	{
 		Row.WholeRowContent()
@@ -72,7 +63,6 @@ namespace
 		];
 	}
 
-	/** "IFCLENGTHMEASURE" → the value tooltip, so the IFC type stays discoverable. */
 	FString MakeValueTooltip(const FFragAttribute& Attribute)
 	{
 		if (Attribute.Type.IsEmpty())
@@ -126,9 +116,7 @@ void FFragmentsMetadataDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 		return;
 	}
 
-	// Replace the default struct/object rows with the readable layout below.
 	{
-		// (property hiding happens for every layout, including the skipped one below)
 		const TSharedRef<IPropertyHandle> ItemDataHandle = DetailBuilder.GetProperty(TEXT("ItemData"));
 		if (ItemDataHandle->IsValidHandle())
 		{
@@ -148,10 +136,7 @@ void FFragmentsMetadataDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 		}
 	}
 
-	// Selecting an actor builds one layout for the actor and one for its metadata
-	// component, both against the same builder — EditCategory hands back the same
-	// category, so without this the whole section is emitted twice. The actor
-	// layout wins; the component layout only draws when it is selected on its own.
+	// EditCategory returns the same category for actor and component layouts, so skip the duplicate.
 	const UClass* BaseClass = DetailBuilder.GetBaseClass();
 	const bool bCustomizingComponent = Objects.Num() > 0
 		&& Objects[0].IsValid()
@@ -201,7 +186,6 @@ void FFragmentsMetadataDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 	BuildClassificationRows(Category, Item);
 	BuildRelationRows(Category, Item);
 
-	// Copy the whole record, so it can be pasted into a spreadsheet or an issue.
 	TWeakObjectPtr<UFragmentsMetadataComponent> WeakComponent(Component);
 	Category.AddCustomRow(LOCTEXT("CopyFilter", "Copy IFC Metadata"))
 	.WholeRowContent()
@@ -248,7 +232,6 @@ void FFragmentsMetadataDetails::BuildIdentityRows(IDetailCategoryBuilder& Catego
 			FString::Printf(TEXT("%s (%s), local id %d"), *Container, *Item.ContainerCategory, Item.ContainerLocalId));
 	}
 
-	// Only worth its own row when the element is nested inside another element.
 	if (!Item.StoreyName.IsEmpty() && Item.StoreyLocalId != Item.ContainerLocalId)
 	{
 		FillTextRow(Category.AddCustomRow(LOCTEXT("StoreyFilter", "Storey")), TEXT("Storey"), Item.StoreyName,

@@ -11,7 +11,6 @@ void UFragmentsUESubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	// Register console command for testing: FragmentsUE.Parse <filepath>
 	ParseCommand = TSharedPtr<IConsoleCommand>(
 		IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("FragmentsUE.Parse"),
@@ -21,12 +20,10 @@ void UFragmentsUESubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		),
 		[](IConsoleCommand* Cmd)
 		{
-			// Custom deleter: unregister on destruction
 			IConsoleManager::Get().UnregisterConsoleObject(Cmd);
 		}
 	);
 
-	// Register console command for testing: FragmentsUE.Import <filepath>
 	ImportCommand = TSharedPtr<IConsoleCommand>(
 		IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("FragmentsUE.Import"),
@@ -65,12 +62,10 @@ void UFragmentsUESubsystem::HandleParseCommand(const TArray<FString>& Args)
 	if (Args.Num() < 1)
 	{
 		UE_LOG(LogFragmentsUE, Warning, TEXT("Usage: FragmentsUE.Parse <filepath>"));
-		UE_LOG(LogFragmentsUE, Warning, TEXT("Example: FragmentsUE.Parse D:/Projects/FragImporter/models/AR520.frag"));
 		return;
 	}
 
 	FString FilePath = Args[0];
-	// Handle paths with spaces by joining remaining args
 	for (int32 i = 1; i < Args.Num(); i++)
 	{
 		FilePath += TEXT(" ") + Args[i];
@@ -167,11 +162,10 @@ void UFragmentsUESubsystem::HandleImportCommand(const TArray<FString>& Args)
 		}
 	}
 
-	// We need a world context. Since it's a console command, we can try to find a world from GEngine.
+	// A console command carries no world context, so one has to be found on GEngine.
 	UWorld* World = nullptr;
 	if (GEngine)
 	{
-		// Try to find the first PIE or Game world first
 		for (const FWorldContext& Context : GEngine->GetWorldContexts())
 		{
 			if (Context.WorldType == EWorldType::PIE || Context.WorldType == EWorldType::Game)
@@ -180,8 +174,7 @@ void UFragmentsUESubsystem::HandleImportCommand(const TArray<FString>& Args)
 				break;
 			}
 		}
-		
-		// If no PIE world, try to find an Editor world
+
 		if (!World)
 		{
 			for (const FWorldContext& Context : GEngine->GetWorldContexts())
@@ -202,10 +195,9 @@ void UFragmentsUESubsystem::HandleImportCommand(const TArray<FString>& Args)
 	}
 
 	FFragImportOptions Options;
-	Options.ScaleFactor = 100.0f; // Default scale
+	Options.ScaleFactor = 100.0f;
 	Options.ImportMode = bHierarchy ? EFragImportMode::HierarchyPerBody : EFragImportMode::Instanced;
 
-	// Load the default base material from the plugin's content folder
 	UMaterialInterface* BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/FragmentsUE/M_FragBase.M_FragBase"));
 	if (!BaseMaterial)
 	{

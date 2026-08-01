@@ -22,7 +22,6 @@ const FName SFragmentsFilterPanel::TabId(TEXT("FragmentsUEFilter"));
 
 namespace
 {
-	/** Sorted rows from a category or storey count map, biggest group first. */
 	TArray<FFragFilterRow> MakeRows(const TMap<FString, int32>& Counts)
 	{
 		TArray<FFragFilterRow> Rows;
@@ -36,8 +35,7 @@ namespace
 			Rows.Add(MoveTemp(Row));
 		}
 
-		// Biggest first, then alphabetically — the long tail of one-off categories
-		// an IFC file carries is not what anyone is looking for.
+		// Biggest first, then alphabetically — an IFC file's long tail of one-off categories is noise.
 		Rows.Sort([](const FFragFilterRow& A, const FFragFilterRow& B)
 		{
 			return A.Count != B.Count ? A.Count > B.Count : A.Name < B.Name;
@@ -55,7 +53,6 @@ void SFragmentsFilterPanel::Construct(const FArguments& InArgs)
 	[
 		SNew(SVerticalBox)
 
-		// ── Model picker and global actions ────────────────────────────────────
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(8.0f, 8.0f, 8.0f, 4.0f)
@@ -105,7 +102,6 @@ void SFragmentsFilterPanel::Construct(const FArguments& InArgs)
 			SNew(SSeparator)
 		]
 
-		// ── The two lists ──────────────────────────────────────────────────────
 		+ SVerticalBox::Slot()
 		.FillHeight(1.0f)
 		[
@@ -144,8 +140,6 @@ void SFragmentsFilterPanel::Construct(const FArguments& InArgs)
 	Refresh();
 }
 
-// ── Model selection ────────────────────────────────────────────────────────────
-
 void SFragmentsFilterPanel::RefreshModelList()
 {
 	Models.Reset();
@@ -162,8 +156,6 @@ void SFragmentsFilterPanel::RefreshModelList()
 		Models.Add(*It);
 	}
 
-	// Keep the current pick when it survived the level change, otherwise take the
-	// first model so the panel is useful without a click.
 	if (!SelectedModel.IsValid() || !Models.Contains(SelectedModel))
 	{
 		SelectedModel = Models.Num() > 0 ? Models[0] : nullptr;
@@ -225,8 +217,6 @@ TSharedRef<SWidget> SFragmentsFilterPanel::BuildModelPicker()
 		});
 }
 
-// ── Rows ───────────────────────────────────────────────────────────────────────
-
 bool SFragmentsFilterPanel::IsRowVisible(const AFragmentsActor* Model, const TArray<int32>& LocalIds) const
 {
 	if (!Model)
@@ -234,8 +224,6 @@ bool SFragmentsFilterPanel::IsRowVisible(const AFragmentsActor* Model, const TAr
 		return true;
 	}
 
-	// Unchecked as soon as any part of the group is hidden, so a half-filtered
-	// group never reads as fully showing.
 	for (const int32 LocalId : LocalIds)
 	{
 		if (Model->IsLocalIdHidden(LocalId))

@@ -6,9 +6,6 @@
 #include "ActorFactories/ActorFactory.h"
 #include "ActorFactoryFragmentsModel.generated.h"
 
-/**
- * Factory that spawns an AFragmentsActor when a UFragmentsModelAsset is dragged into the viewport.
- */
 UCLASS()
 class FRAGMENTSUEEDITOR_API UActorFactoryFragmentsModel : public UActorFactory
 {

@@ -13,7 +13,6 @@ class SVerticalBox;
 class STextBlock;
 class SWidget;
 
-/** One level or category row: what it is, how big it is, whether it is showing. */
 struct FFragFilterRow
 {
 	FString Name;
@@ -21,13 +20,7 @@ struct FFragFilterRow
 	bool bVisible = true;
 };
 
-/**
- * Level, category and property filtering for an imported model.
- *
- * Reads the IFC metadata already on the AFragmentsActor and drives its filtering
- * API — the panel holds no filter state of its own, so a model filtered from
- * Blueprint or the console still shows up here correctly on Refresh.
- */
+/** Holds no filter state — re-reads the actor each Refresh so external filtering stays in sync. */
 class FRAGMENTSUEEDITOR_API SFragmentsFilterPanel : public SCompoundWidget
 {
 public:
@@ -36,30 +29,20 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
-	/** Tab id this panel is registered under. */
 	static const FName TabId;
 
 private:
-	// ── Model selection ────────────────────────────────────────────────────────
-
-	/** Every AFragmentsActor in the editor world, newest import last. */
 	void RefreshModelList();
 
-	/** The model the panel is driving, or null when the level has none. */
 	AFragmentsActor* GetSelectedModel() const;
 
 	TSharedRef<SWidget> BuildModelPicker();
 	FText GetSelectedModelName() const;
 
-	// ── Rows ───────────────────────────────────────────────────────────────────
-
-	/** Re-read levels, categories and hidden state from the model. */
 	void Refresh();
 
-	/** Rebuild one of the two row lists into its container. */
 	void RebuildRowWidgets(const TSharedPtr<SVerticalBox>& Container, TArray<FFragFilterRow>& Rows, bool bIsStorey);
 
-	/** Whether every id behind this row is currently visible. */
 	bool IsRowVisible(const AFragmentsActor* Model, const TArray<int32>& LocalIds) const;
 
 	void OnRowCheckStateChanged(ECheckBoxState NewState, FString RowName, bool bIsStorey);
@@ -68,8 +51,6 @@ private:
 	FReply OnRefreshClicked();
 
 	FText GetStatusText() const;
-
-	// ── State ──────────────────────────────────────────────────────────────────
 
 	TArray<TWeakObjectPtr<AFragmentsActor>> Models;
 	TWeakObjectPtr<AFragmentsActor> SelectedModel;

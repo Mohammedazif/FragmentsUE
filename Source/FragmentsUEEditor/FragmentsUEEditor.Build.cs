@@ -20,10 +20,10 @@ public class FragmentsUEEditor : ModuleRules
 			"AssetTools",
 			"Slate",
 			"SlateCore",
-			"PropertyEditor",   // IFC metadata Details panel customization
+			"PropertyEditor",
 			"InputCore",
-			"ApplicationCore",      // clipboard copy
-			"WorkspaceMenuStructure" // the IFC Filter tab's home in the Window menu
+			"ApplicationCore",
+			"WorkspaceMenuStructure"
 		});
 	}
 }

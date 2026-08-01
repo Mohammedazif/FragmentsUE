@@ -60,8 +60,6 @@ UMaterialInterface* AFragmentsActor::GetOrCreateMaterial(
 		return *FoundMID;
 	}
 
-	// Baking writes a real Material Instance asset so the level can be packaged.
-	// A dynamic instance is the fallback, and the only option at runtime.
 	UMaterialInterface* Result = nullptr;
 
 	if (AssetFactory.IsValid())
@@ -73,9 +71,9 @@ UMaterialInterface* AFragmentsActor::GetOrCreateMaterial(
 	if (!Result)
 	{
 		UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
-		MID->SetVectorParameterValue(TEXT("BaseColor"), Color); // M_FragBase parameter
+		MID->SetVectorParameterValue(TEXT("BaseColor"), Color);
 		MID->SetVectorParameterValue(TEXT("Color"), Color); // Datasmith materials use "Color"
-		MID->SetScalarParameterValue(TEXT("Opacity"), Opacity); // M_FragBase opacity parameter
+		MID->SetScalarParameterValue(TEXT("Opacity"), Opacity);
 
 		if (!bIsGlass)
 		{
@@ -111,9 +109,7 @@ static void ApplyPickingCollision(UPrimitiveComponent* Component, bool bEnablePi
 	Component->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Component->SetCollisionResponseToChannel(PickingChannel, ECR_Block);
 
-	// Movement sweeps run on these. Re-ignored after the picking channel in case it is
-	// one of them, so a trace channel that doubles as a movement channel still cannot
-	// block the player — picking is worth less than being able to walk.
+	// Re-ignored after the picking channel, so a channel doubling as a movement one cannot block.
 	Component->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 	Component->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
 	Component->SetCollisionResponseToChannel(ECC_Vehicle, ECR_Ignore);
@@ -238,8 +234,6 @@ void AFragmentsActor::DiscardCancelledBuild()
 {
 	bImportWasCancelled = true;
 
-	// Saving here would leave a half-populated asset folder on disk and log that the
-	// level is ready to package.
 	AssetFactory.Reset();
 
 	for (AActor* Spawned : SpawnedChildActors)
@@ -259,7 +253,6 @@ void AFragmentsActor::DiscardCancelledBuild()
 	InstanceMetadata.Reset();
 	MergedElementMetadata.Reset();
 
-	// Cleared so the same actor can be built again rather than sitting half-imported.
 	bHasBuiltHierarchy = false;
 
 	UE_LOG(LogFragmentsUE, Warning, TEXT("Import cancelled — nothing was written and the actor is empty."));
@@ -287,15 +280,12 @@ void AFragmentsActor::BuildFromImportResult(
 	bPickingEnabled = Options.bEnableElementPicking;
 	PickingChannel = Options.PickingTraceChannel;
 
-	// Kept for the filtering API, which can only offer what the chosen mode built.
 	BuiltImportMode = Options.ImportMode;
 	LocalIdToActors.Reset();
 	HiddenLocalIds.Reset();
 
 #if WITH_EDITOR
-	// Merged meshes identify their element through UV0, because the editor build
-	// reorders triangles. Reading it needs this project setting, and without it the
-	// lookup returns nothing rather than something wrong.
+	// Editor builds reorder triangles, so merged picking must read UV0 instead of face indices.
 	if (bPickingEnabled && FragModeIsMerged(Options.ImportMode)
 		&& !UPhysicsSettings::Get()->bSupportUVFromHitResults)
 	{
@@ -318,9 +308,7 @@ void AFragmentsActor::BuildFromImportResult(
 	BuildMetadataTables(Result);
 
 #if WITH_EDITOR
-	// Second stage of the import: everything generated below goes into the
-	// Content Browser instead of living on this actor, so the level can be saved
-	// and cooked. Outside the editor this stays null and the build is transient.
+	// Outside the editor this stays null, so everything built below is transient.
 	if (Options.bSaveAsAssets)
 	{
 		AssetFactory = MakeShared<FFragAssetFactory>(Options.AssetPath, Result.ModelName);
@@ -334,8 +322,6 @@ void AFragmentsActor::BuildFromImportResult(
 	TMap<int64, UStaticMesh*> StaticMeshCache;
 	TMap<uint32, UMaterialInterface*> MaterialCache;
 
-	// Whole-model merge has no hierarchy left to build, so it short-circuits.
-	// The scoped modes run inside the hierarchy walk instead.
 	if (Options.ImportMode == EFragImportMode::MergedWholeModel)
 	{
 		TArray<const FFragInstance*> AllInstances;
@@ -362,9 +348,6 @@ void AFragmentsActor::BuildFromImportResult(
 		}
 		int32 SpawnCount = 0;
 
-		// One set for the whole walk, not one per node: an id repeated under a
-		// different parent is the same geometry in the same place, and realising it
-		// twice is duplicated work for an identical picture.
 		TSet<int32> ConsumedLocalIds;
 		bReportedActorLimit = false;
 
@@ -387,7 +370,6 @@ void AFragmentsActor::BuildFromImportResult(
 	}
 
 
-	// 1. Find all unique Geometry+Material pairs from the instances
 	struct FGeomMatPair
 	{
 		int32 GeometryIndex;
@@ -422,7 +404,6 @@ void AFragmentsActor::BuildFromImportResult(
 		}
 	}
 
-	// 2. Create meshes and components for each unique pair
 	for (const auto& PairKV : UniquePairs)
 	{
 		int64 Key = PairKV.Key;
@@ -487,11 +468,6 @@ void AFragmentsActor::BuildFromImportResult(
 				ISMC->SetMaterial(0, TargetMID);
 				ApplyPickingCollision(ISMC, bPickingEnabled, PickingChannel);
 				
-				if (bIsGlass)
-				{
-					UE_LOG(LogFragmentsUE, Warning, TEXT("WINDOW DEBUG: Applied Glass Material to component %s"), *ISMC->GetName());
-				}
-
 				ISMC->RegisterComponent();
 				InstancedMeshes.Add(Key, ISMC);
 			}
@@ -512,15 +488,7 @@ void AFragmentsActor::BuildFromImportResult(
 		}
 	}
 
-	// 3. Add instances
-	//
-	// Procedural mode has no instancing to fall back on: UProceduralMeshComponent keeps
-	// its section arrays on the CPU for the component's lifetime, so every placement
-	// after the first is a deep copy of all of them plus its own GPU buffers. Cost grows
-	// with instances x vertices where the instanced path grows with instances + vertices,
-	// and a file pairing one large geometry with a long sample list turns a few megabytes
-	// on disk into an arbitrary allocation. Bound the total and name the mode that does
-	// this properly. Only duplicates are charged; the templates were built above.
+	// Procedural components cannot share geometry, so unbounded duplication is an allocation risk.
 	static constexpr int64 GMaxProceduralDuplicateVertices = 8 * 1000 * 1000;
 	int64 ProceduralDuplicateVertices = 0;
 	bool bReportedProceduralLimit = false;
@@ -534,8 +502,6 @@ void AFragmentsActor::BuildFromImportResult(
 			{
 				const int32 InstanceIndex = (*ISMC_Ptr)->AddInstance(Instance.Transform, true);
 
-				// Remember which element each instance came from so a trace hit
-				// on this component can be resolved back to its IFC metadata.
 				if (InstanceIndex != INDEX_NONE)
 				{
 					const int32* MetadataIndex = LocalIdToMetadataIndex.Find(Instance.LocalId);
@@ -591,20 +557,9 @@ void AFragmentsActor::BuildFromImportResult(
 	FinishAssetCreation();
 }
 
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Merge by Category
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Cap on one merged mesh, so a large category splits instead of building a monster. */
 static constexpr int32 GMaxMergedVertices = 500000;
 
-/**
- * The same cap counted in indices. Typical BIM geometry runs about three indices per
- * vertex, so this is roughly the same size of chunk by a second measure — one that a
- * vertex-poor, index-heavy shell cannot slip past.
- */
+/** Same cap by indices: BIM geometry averages about three indices per vertex. */
 static constexpr int64 GMaxMergedIndices = 4000000;
 
 int32 AFragmentsActor::BuildMergedComponents(
@@ -621,10 +576,6 @@ int32 AFragmentsActor::BuildMergedComponents(
 	{
 		return 0;
 	}
-	// Elements are bucketed by everything that would make them a separate draw
-	// call anyway: IFC category, resolved colour, opacity and material class.
-	// Colour is part of the key so a merged mesh shades exactly like the
-	// unmerged one — vertex colours stay uniform within a bucket.
 	struct FMergeBucket
 	{
 		FString Category;
@@ -645,8 +596,6 @@ int32 AFragmentsActor::BuildMergedComponents(
 			continue;
 		}
 
-		// Material selection must match the per-element path exactly, or a merged
-		// element shades differently from the same element unmerged.
 		UMaterialInterface* TargetMaterial = BaseMaterial;
 		bool bIsGlass = false;
 		float AdjustedOpacity = Instance.Opacity;
@@ -670,7 +619,6 @@ int32 AFragmentsActor::BuildMergedComponents(
 			}
 		}
 
-		// Fall back rather than leaving a null slot, which renders as default grey.
 		if (!TargetMaterial)
 		{
 			TargetMaterial = BaseMaterial;
@@ -713,7 +661,6 @@ int32 AFragmentsActor::BuildMergedComponents(
 		UMaterialInterface* TargetMID = GetOrCreateMaterial(
 			Bucket.Material, CorrectedColor, Bucket.Opacity, /*bDoubleSided*/ true, MaterialCache, Bucket.bIsGlass);
 
-		// Sanitise the category once; it becomes part of every component name.
 		FString SafeCategory = Bucket.Category;
 		for (int32 i = 0; i < SafeCategory.Len(); ++i)
 		{
@@ -737,9 +684,7 @@ int32 AFragmentsActor::BuildMergedComponents(
 				return;
 			}
 
-			// Node labels repeat across the model (every roof has an IFCSLAB
-			// child), so the name needs a serial or a later mesh silently
-			// clobbers an earlier one sharing the outer.
+			// Node labels repeat, so the serial stops a later mesh clobbering an earlier one.
 			const FString MeshName = FString::Printf(TEXT("SM_Merged_%s_%d"),
 				*SafeCategory, MergedMeshSerial++);
 
@@ -764,8 +709,7 @@ int32 AFragmentsActor::BuildMergedComponents(
 
 				MergedMeshes.Add(MeshComponent);
 
-				// Keep the merged elements addressable. The part index also rides in UV0,
-				// so the map stays usable even when the build reordered the triangles.
+				// The part index also rides in UV0, so this map survives the editor build's reordering.
 				if (TriangleStarts.Num() == PartMetadataIndices.Num())
 				{
 					FFragMergedElementMap& FaceMap = MergedElementMetadata.FindOrAdd(MeshComponent);
@@ -792,11 +736,7 @@ int32 AFragmentsActor::BuildMergedComponents(
 				continue;
 			}
 
-			// Vertices alone do not bound the chunk. A shell whose faces all reference
-			// the same few points dedups to a handful of vertices while carrying
-			// millions of indices, and every instance of it re-adds the whole index
-			// list — so a bucket could grow past what int32 could even count while
-			// ChunkVertices stayed in the hundreds.
+			// Indices bounded too: an index-heavy, vertex-poor shell can overflow int32.
 			if (ChunkVertices > 0
 				&& (ChunkVertices + Geometry.Positions.Num() > GMaxMergedVertices
 					|| ChunkIndices + Geometry.Indices.Num() > GMaxMergedIndices))
@@ -823,10 +763,6 @@ int32 AFragmentsActor::BuildMergedComponents(
 	return ChunksBuilt;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// IFC Metadata
-// ─────────────────────────────────────────────────────────────────────────────
-
 void AFragmentsActor::BuildMetadataTables(const FFragImportResult& Result)
 {
 	ItemMetadata.Reset();
@@ -840,8 +776,6 @@ void AFragmentsActor::BuildMetadataTables(const FFragImportResult& Result)
 		return;
 	}
 
-	// Only elements that actually render are worth keeping on the actor; the
-	// property sets and type objects they reference have already been folded in.
 	ItemMetadata.Reserve(FMath::Min(Result.Instances.Num(), Result.Items.Num()));
 
 	for (const FFragInstance& Instance : Result.Instances)
@@ -921,12 +855,7 @@ bool AFragmentsActor::GetMetadataForFace(UStaticMeshComponent* Component, int32 
 {
 	if (const FFragMergedElementMap* FaceMap = MergedElementMetadata.Find(Component))
 	{
-		// The editor build runs a vertex-cache optimiser over the index buffer, so a
-		// face index from a trace is a position in the optimised order while these
-		// starts describe the emission order. Searching one with the other resolves to
-		// whichever element happens to sit there — a wrong name and GUID reported with
-		// no sign that anything went wrong. Refuse instead; GetMetadataFromHit has the
-		// UV path that does survive the reorder.
+		// Editor builds reorder triangles, so a face index no longer names an element here.
 		if (!FaceMap->bTriangleOrderPreserved)
 		{
 			OutItem = FFragItemMetadata();
@@ -935,7 +864,6 @@ bool AFragmentsActor::GetMetadataForFace(UStaticMeshComponent* Component, int32 
 
 		if (FaceIndex >= 0 && FaceMap->TriangleStarts.Num() > 0)
 		{
-			// Last element whose first triangle is at or before this face.
 			int32 Low = 0;
 			int32 High = FaceMap->TriangleStarts.Num() - 1;
 			int32 Found = INDEX_NONE;
@@ -972,15 +900,12 @@ bool AFragmentsActor::GetMetadataForFace(UStaticMeshComponent* Component, int32 
 
 bool AFragmentsActor::GetMetadataFromHit(const FHitResult& Hit, FFragItemMetadata& OutItem) const
 {
-	// Instanced mode: FHitResult::Item carries the instance index.
 	if (UInstancedStaticMeshComponent* ISMC = Cast<UInstancedStaticMeshComponent>(Hit.GetComponent()))
 	{
 		return GetMetadataForInstance(ISMC, Hit.Item, OutItem);
 	}
 
-	// Merged mode: the face index picks the element out of the welded mesh.
-	// Requires the trace to return face indices — enable "Support UV From Hit
-	// Results" and trace with bReturnFaceIndex, against complex collision.
+	// Needs bReturnFaceIndex traces against complex collision, plus Support UV From Hit Results.
 	if (UStaticMeshComponent* MeshComponent = Cast<UStaticMeshComponent>(Hit.GetComponent()))
 	{
 		if (const FFragMergedElementMap* FaceMap = MergedElementMetadata.Find(MeshComponent))
@@ -990,12 +915,7 @@ bool AFragmentsActor::GetMetadataFromHit(const FHitResult& Hit, FFragItemMetadat
 				return GetMetadataForFace(MeshComponent, Hit.FaceIndex, OutItem);
 			}
 
-			// The editor build permuted the triangles, so the face index no longer
-			// names an element. The element index the builder wrote into UV0 does
-			// survive it: all three corners of a triangle carry the same value, so the
-			// interpolated UV at the hit is that value exactly. Reading it needs
-			// "Support UV From Hit Results" in Project Settings → Physics, which is the
-			// same setting a face index needs in the first place.
+			// All three corners share the UV0 part index, so the interpolated hit UV survives reordering.
 			FVector2D PartUV = FVector2D::ZeroVector;
 			if (UGameplayStatics::FindCollisionUV(Hit, /*UVChannel*/ 0, PartUV))
 			{
@@ -1013,7 +933,6 @@ bool AFragmentsActor::GetMetadataFromHit(const FHitResult& Hit, FFragItemMetadat
 		}
 	}
 
-	// Hierarchy mode: the element actor carries its own metadata component.
 	if (const UFragmentsMetadataComponent* Component = UFragmentsMetadataLibrary::FindMetadataComponent(Hit.GetActor(), /*bSearchAttachParents*/ true))
 	{
 		OutItem = Component->ItemData;
@@ -1111,9 +1030,6 @@ TArray<int32> AFragmentsActor::FindItemsByStorey(const FString& StoreyName) cons
 	TArray<int32> Found;
 	for (const FFragItemMetadata& Item : ItemMetadata)
 	{
-		// The storey node is matched by its own name, not by StoreyName — a storey
-		// does not stand on itself. Without this the merged-per-storey mode, which
-		// hangs the level's whole geometry on that node, would isolate to nothing.
 		const bool bIsTheStorey =
 			Item.Category.Equals(TEXT("IFCBUILDINGSTOREY"), ESearchCase::IgnoreCase)
 			&& Item.Name.Equals(StoreyName, ESearchCase::IgnoreCase);
@@ -1139,9 +1055,6 @@ TMap<FString, int32> AFragmentsActor::GetStoreyCounts() const
 	return Counts;
 }
 
-// ── Filtering ──────────────────────────────────────────────────────────────────
-
-/** Local id an actor renders, read from the metadata component. -1 when it has none. */
 static int32 GetActorLocalId(const AActor* Actor)
 {
 	if (!IsValid(Actor))
@@ -1162,8 +1075,6 @@ bool AFragmentsActor::SupportsFiltering() const
 
 bool AFragmentsActor::SupportsElementFiltering() const
 {
-	// Merged per storey keeps a level's geometry on one actor, so it can hide a
-	// level but never a single element.
 	return SupportsFiltering() && BuiltImportMode != EFragImportMode::HierarchyPerStorey;
 }
 
@@ -1190,7 +1101,7 @@ void AFragmentsActor::EnsureFilterIndex()
 
 	if (LocalIdToActors.Num() > 0)
 	{
-		UE_LOG(LogFragmentsUE, Log,
+		UE_LOG(LogFragmentsUE, Verbose,
 			TEXT("Rebuilt the filter index for %s from %d spawned actors."),
 			*ModelName, SpawnedChildActors.Num());
 	}
@@ -1206,9 +1117,7 @@ void AFragmentsActor::ApplyActorVisibility(AActor* Actor, bool bVisible)
 	Actor->SetActorHiddenInGame(!bVisible);
 
 #if WITH_EDITOR
-	// The editor viewport ignores bHidden, so it needs telling separately. Neither
-	// call touches component visibility, which is what keeps the abstract volumes
-	// hidden at build time — IfcSpace and friends — from reappearing on Clear.
+	// Editor viewport ignores bHidden; neither call touches component visibility (IfcSpace hidden).
 	Actor->SetIsTemporarilyHiddenInEditor(!bVisible);
 #endif
 }
@@ -1223,7 +1132,6 @@ TArray<int32> AFragmentsActor::GetFilterableLocalIds() const
 		return Ids;
 	}
 
-	// Index not built yet. Read the actors directly rather than reporting nothing.
 	TSet<int32> Unique;
 	for (const AActor* Child : SpawnedChildActors)
 	{
@@ -1336,8 +1244,6 @@ void AFragmentsActor::ClearFilter()
 {
 	EnsureFilterIndex();
 
-	// Every actor, not just the ones this filter hid — a level saved mid-filter
-	// comes back with actors hidden and an index that no longer remembers why.
 	for (const TPair<int32, FFragActorList>& Pair : LocalIdToActors)
 	{
 		for (const TObjectPtr<AActor>& Actor : Pair.Value.Actors)
@@ -1349,17 +1255,6 @@ void AFragmentsActor::ClearFilter()
 	HiddenLocalIds.Reset();
 }
 
-/**
- * Whether anything under this node is still waiting to be built.
- *
- * Consumption has to be part of the question, not a separate check further down. The
- * node actor and its IFC metadata — a deep copy of every attribute and property set —
- * are created before the per-instance loop is reached, so testing for geometry alone
- * left the expensive half of a repeated node fully exposed: a file whose children
- * vector points many offsets at one node costs four bytes per repeat and bought a
- * whole actor plus a whole metadata copy each time. It also left behind labelled,
- * metadata-bearing actors containing nothing, which read as real elements.
- */
 static bool HasUnbuiltGeometry(
 	const FFragSpatialNode& Node,
 	const TMap<int32, TArray<const FFragInstance*>>& InstancesByLocalId,
@@ -1379,24 +1274,13 @@ static bool HasUnbuiltGeometry(
 	return false;
 }
 
-/**
- * Every instance at this node or anywhere beneath it, each taken once.
- *
- * Nothing in the file forbids many spatial nodes from carrying the same local id, and
- * without the visited set each repeat welds the same geometry into the mesh again — a
- * few bytes per extra node buying a full copy of an element, for a picture identical
- * to the one a single copy gives.
- */
 static void CollectSubtreeInstances(
 	const FFragSpatialNode& Node,
 	const TMap<int32, TArray<const FFragInstance*>>& InstancesByLocalId,
 	TSet<int32>& ConsumedLocalIds,
 	TArray<const FFragInstance*>& OutInstances)
 {
-	// The `>= 0` matters: bucket nodes all carry -1, so if an instance ever kept that
-	// id, the first bucket would consume it and every other bucket in the model would
-	// then be suppressed. The parser drops such samples today, but that invariant
-	// lives in another file — this keeps the walk correct on its own terms.
+	// Bucket nodes all carry LocalId -1, so the >= 0 test stops one bucket consuming every other.
 	if (Node.LocalId >= 0 && !ConsumedLocalIds.Contains(Node.LocalId))
 	{
 		if (const TArray<const FFragInstance*>* Found = InstancesByLocalId.Find(Node.LocalId))
@@ -1412,7 +1296,6 @@ static void CollectSubtreeInstances(
 	}
 }
 
-/** Spatial containers group elements; they are never elements themselves. */
 static bool IsSpatialContainerCategory(const FString& Category)
 {
 	return Category.Equals(TEXT("IFCPROJECT"), ESearchCase::IgnoreCase)
@@ -1422,12 +1305,6 @@ static bool IsSpatialContainerCategory(const FString& Category)
 		|| Category.Equals(TEXT("IFCSPACE"), ESearchCase::IgnoreCase);
 }
 
-/**
- * True when this node is a real IFC element rather than a spatial container or
- * a category bucket. The walk stops at the first of these and welds everything
- * below it, so an element keeps one actor no matter how many bodies or
- * sub-parts it decomposes into.
- */
 static bool IsElementNode(const FFragSpatialNode& Node, const FFragImportResult& Result)
 {
 	if (Node.LocalId < 0 || !Result.Categories.IsValidIndex(Node.LocalId))
@@ -1438,7 +1315,6 @@ static bool IsElementNode(const FFragSpatialNode& Node, const FFragImportResult&
 	return !IsSpatialContainerCategory(Result.Categories[Node.LocalId]);
 }
 
-/** Whether the walk should stop here and weld everything below into one actor. */
 static bool ShouldMergeAtNode(
 	const FFragSpatialNode& Node,
 	const FFragImportResult& Result,
@@ -1449,10 +1325,7 @@ static bool ShouldMergeAtNode(
 	{
 	case EFragImportMode::HierarchyPerStorey:
 	{
-		// The spatial tree alternates bucket nodes (an IFC class label, no local
-		// id) with item nodes (a local id, no label). A storey is therefore
-		// identified by its *item* category — matching the bucket label instead
-		// would swallow every storey in the building at once.
+			// The spatial tree alternates bucket nodes (a label, no id) with item nodes (an id, no label).
 		if (Node.LocalId < 0)
 		{
 			return false;
@@ -1469,12 +1342,6 @@ static bool ShouldMergeAtNode(
 	}
 }
 
-/**
- * Ceiling on actors from one import. Every spatial node and every body under it
- * becomes an actor in the per-body modes, and both counts are file-controlled: N
- * sibling nodes on one local id used to cost N spawns each. Well past this the editor
- * is unusable regardless of what the file intended, and a merged mode is the answer.
- */
 static constexpr int32 GMaxSpawnedActors = 250000;
 
 AActor* AFragmentsActor::SpawnHierarchyNode(
@@ -1500,8 +1367,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 	}
 
 #if WITH_EDITOR
-	// Latched, because ReceivedUserCancel is not documented to stay true once read —
-	// the walk polls it from hundreds of thousands of places.
 	if (!bCancelRequested && SlowTask && SlowTask->ShouldCancel())
 	{
 		bCancelRequested = true;
@@ -1525,23 +1390,17 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 		return nullptr;
 	}
 
-	// Skip rendering this branch entirely if there is no geometry anywhere beneath it
 	if (!HasUnbuiltGeometry(Node, InstancesByLocalId, ConsumedLocalIds))
 	{
 		return nullptr;
 	}
 
-	// ── Determine a clean label for this node ────────────────────────────────
 	const bool bHasGeometry = InstancesByLocalId.Contains(Node.LocalId);
 	const bool bHasRealName = !Node.Name.IsEmpty();
 
-	// Check if this node is just an anonymous wrapper (e.g. Group_XXXX).
-	// We want to KEEP category buckets (like IFCBEAM, IFCBUILDINGELEMENTPROXY) 
-	// so they appear as grouping folders inside the floors, matching Datasmith.
 	bool bIsAnonymousGroup = !bHasRealName && !bHasGeometry && 
 		(Node.Category.IsEmpty() || Node.Category.Equals(TEXT("Group"), ESearchCase::IgnoreCase) || Node.Category.Equals(TEXT("Object"), ESearchCase::IgnoreCase));
 
-	// Transparent pass-through: skip anonymous groups and attach their children directly to the parent.
 	if (bIsAnonymousGroup)
 	{
 		for (const FFragSpatialNode& ChildNode : Node.Children)
@@ -1551,7 +1410,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 		return ParentActor;
 	}
 
-	// ── Build a clean Datasmith-style label ───────────────────────────────────
 	FString NodeLabel;
 	if (bHasRealName)
 	{
@@ -1566,7 +1424,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 		NodeLabel = Node.Category;
 	}
 
-	// Datasmith sanitization: replace any character that is not alphanumeric or '-' with '_'
 	for (int32 i = 0; i < NodeLabel.Len(); ++i)
 	{
 		TCHAR& c = NodeLabel[i];
@@ -1579,7 +1436,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	// 1. Spawn an empty folder actor for this spatial node
 	AFragmentsNodeActor* NodeActor = World->SpawnActor<AFragmentsNodeActor>(SpawnParams);
 	if (!NodeActor)
 	{
@@ -1591,8 +1447,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 	NodeActor->SetActorLabel(NodeLabel);
 #endif
 
-	// Spatial nodes carry IFC data of their own — a storey's Elevation, a space's
-	// LongName, Pset_BuildingStoreyCommon and so on.
 	if (Options.bImportMetadata && Options.bAttachMetadataComponents)
 	{
 		if (const FFragItemMetadata* NodeItem = Result.FindItem(Node.LocalId))
@@ -1607,14 +1461,8 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 	NodeActor->GetRootComponent()->AttachToComponent(ParentActor->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
 	SpawnedChildActors.Add(NodeActor);
 
-	// Registered even though a node usually holds no geometry: in the merged modes
-	// this actor *is* where the subtree's meshes end up, and hiding it is the only
-	// way to filter them. On a bare folder node the entry costs nothing.
 	RegisterFilterActor(Node.LocalId, NodeActor);
 
-	// 2a. Scoped merge: weld this whole subtree into the node actor and stop.
-	// The node keeps its own label, folder and IFC metadata; the elements below
-	// it become geometry without identity.
 	if (ShouldMergeAtNode(Node, Result, InstancesByLocalId, Options.ImportMode))
 	{
 		TArray<const FFragInstance*> SubtreeInstances;
@@ -1638,9 +1486,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 		return NodeActor;
 	}
 
-	// 2. Spawn geometry leaf actors (StaticMeshActors) for instances at this node.
-	// A local id already realised elsewhere in the walk is skipped: the second node
-	// carrying it would spawn the same bodies at the same transforms again.
 	const TArray<const FFragInstance*>* InstancesForNode =
 		(Node.LocalId < 0 || ConsumedLocalIds.Contains(Node.LocalId))
 			? nullptr
@@ -1692,17 +1537,13 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 			}
 
 #if WITH_EDITOR
-			// Labels exist only in the editor, so build them only there — otherwise
-			// the string and its counter are unused locals in a packaged build.
 			{
-				// Leaf label: if no name, fallback to Category_LocalId
 				FString LeafLabel = Inst->Name;
 				if (LeafLabel.IsEmpty())
 				{
 					LeafLabel = FString::Printf(TEXT("%s_%d"), Inst->Category.IsEmpty() ? TEXT("Element") : *Inst->Category, Inst->LocalId);
 				}
 
-				// Datasmith sanitization
 				for (int32 i = 0; i < LeafLabel.Len(); ++i)
 				{
 					TCHAR& c = LeafLabel[i];
@@ -1724,13 +1565,10 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 			UStaticMeshComponent* SMC = SMA->GetStaticMeshComponent();
 			SMC->SetMobility(EComponentMobility::Static);
 
-			// Unconditionally, because AStaticMeshActor's constructor leaves this
-			// component on BlockAll — an element whose mesh failed to build would
-			// otherwise keep it and block the player with invisible geometry.
+			// Unconditional: AStaticMeshActor's constructor leaves this component on BlockAll.
 			SMA->SetActorEnableCollision(bPickingEnabled);
 			ApplyPickingCollision(SMC, bPickingEnabled, PickingChannel);
 
-			// Determine TargetMaterial first
 			UMaterialInterface* TargetMaterial = BaseMaterial;
 			bool bIsGlass = false;
 			float AdjustedOpacity = Inst->Opacity;
@@ -1751,7 +1589,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 				}
 			}
 
-			// Get or build static mesh
 			UStaticMesh* StaticMesh = nullptr;
 			int64 Key = (static_cast<int64>(Inst->GeometryIndex) << 32) | static_cast<uint32>(Inst->MaterialIndex);
 			
@@ -1784,7 +1621,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 				UMaterialInterface* TargetMID = GetOrCreateMaterial(TargetMaterial, CorrectedColor, AdjustedOpacity, Inst->bDoubleSided, MaterialCache, bIsGlass);
 				SMC->SetMaterial(0, TargetMID);
 				
-				// Only hide exact matches for abstract organizational volumes
 				bool bIsVolume = Inst->Category.Equals(TEXT("IfcSpace"), ESearchCase::IgnoreCase) || 
 								 Inst->Category.Equals(TEXT("IfcSite"), ESearchCase::IgnoreCase) ||
 								 Inst->Category.Equals(TEXT("IfcBuilding"), ESearchCase::IgnoreCase) ||
@@ -1796,10 +1632,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 				{
 					SMC->SetVisibility(false);
 					SMC->SetHiddenInGame(true);
-				}
-				else if (bIsGlass)
-				{
-					UE_LOG(LogFragmentsUE, Warning, TEXT("WINDOW DEBUG: Applied Glass Material to actor %s"), *SMA->GetName());
 				}
 			}
 			
@@ -1818,7 +1650,6 @@ AActor* AFragmentsActor::SpawnHierarchyNode(
 		}
 	}
 
-	// 3. Recursively spawn children under this node
 	for (const FFragSpatialNode& ChildNode : Node.Children)
 	{
 		SpawnHierarchyNode(ChildNode, NodeActor, InstancesByLocalId, ConsumedLocalIds, StaticMeshCache, MaterialCache, Result, Options, BaseMaterial, TranslucentMaterial, GlassMaterial, SpawnCount, SlowTask);

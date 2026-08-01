@@ -55,43 +55,33 @@ void UActorFactoryFragmentsModel::PostSpawnActor(UObject* Asset, AActor* NewActo
 		{
 			FFragImportOptions Options = FragAsset->ImportOptions;
 
-			// Get materials
 			UMaterialInterface* BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/FragmentsUE/M_FragBase.M_FragBase"));
 			UMaterialInterface* TranslucentMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/FragmentsUE/M_FragBase_Translucent.M_FragBase_Translucent"));
 			UMaterialInterface* GlassMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/FragmentsUE/M_FragBase_Glass.M_FragBase_Glass"));
 
 			if (!BaseMaterial) BaseMaterial = UMaterial::GetDefaultMaterial(MD_Surface);
 
-			// The parsing is now handled with its own progress bar inside LoadFragFile.
 			FFragImportResult Result = Subsystem->LoadFragFile(FragAsset->SourceFilePath, Options);
 			if (Result.bSuccess)
 			{
 				TSharedPtr<FFragImportResult> SharedResult = MakeShared<FFragImportResult>(MoveTemp(Result));
 				FString FilePath = FragAsset->SourceFilePath;
 
-				// TFunction captures are invisible to the GC, so the actor is held weakly:
-				// opening a level inside the delay window destroys it. The materials are rooted
-				// for as long as the delegate is pending so it cannot dereference a stale
-				// pointer if the /FragmentsUE package is unloaded.
+				// Actor held weakly and materials rooted: TFunction captures are invisible to the GC.
 				TWeakObjectPtr<AFragmentsActor> WeakActor(FragActor);
 				TStrongObjectPtr<UMaterialInterface> BaseMaterialRef(BaseMaterial);
 				TStrongObjectPtr<UMaterialInterface> TranslucentMaterialRef(TranslucentMaterial);
 				TStrongObjectPtr<UMaterialInterface> GlassMaterialRef(GlassMaterial);
 
-				// Delay the actual spawning by 1 second.
 				FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakActor, SharedResult, Options, BaseMaterialRef, TranslucentMaterialRef, GlassMaterialRef, FilePath](float DeltaTime)
 				{
 					AFragmentsActor* TargetActor = WeakActor.Get();
 
-					// Ensure the actor is valid, in the active world, not being destroyed, and IS NOT a preview/transient actor
 					if (IsValid(TargetActor) && SharedResult.IsValid() && TargetActor->GetWorld() != nullptr && 
 						!TargetActor->IsActorBeingDestroyed() && !TargetActor->HasAnyFlags(RF_Transient) && !TargetActor->bIsEditorPreviewActor)
 					{
 						TargetActor->BuildFromImportResult(*SharedResult, Options, BaseMaterialRef.Get(), TranslucentMaterialRef.Get(), GlassMaterialRef.Get());
 						
-						// Show the custom notification exactly once for the final actor.
-						// Each Printf takes its format as a literal: UE 5.6 checks it at
-						// compile time, so a ternary in that position will not bind.
 						const bool bCancelled = TargetActor->bImportWasCancelled;
 						const FString FileName = FPaths::GetCleanFilename(FilePath);
 						const FString Message = bCancelled
@@ -109,8 +99,6 @@ void UActorFactoryFragmentsModel::PostSpawnActor(UObject* Asset, AActor* NewActo
 			}
 			else
 			{
-				// Without this a rejected file produces no UI at all — the actor is simply
-				// empty, which reads as the plugin doing nothing rather than as a failure.
 				UE_LOG(LogFragmentsUE, Error, TEXT("Import failed for %s: %s"), *FragAsset->SourceFilePath, *Result.ErrorMessage);
 
 				FNotificationInfo Info(FText::FromString(FString::Printf(

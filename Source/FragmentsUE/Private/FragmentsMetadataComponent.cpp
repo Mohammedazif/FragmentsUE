@@ -198,10 +198,6 @@ FString UFragmentsMetadataComponent::ToDisplayString() const
 	return Builder.ToString();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Blueprint library
-// ─────────────────────────────────────────────────────────────────────────────
-
 UFragmentsMetadataComponent* UFragmentsMetadataLibrary::FindMetadataComponent(AActor* Actor, bool bSearchAttachParents)
 {
 	while (IsValid(Actor))

@@ -6,10 +6,6 @@
 #include "Factories/Factory.h"
 #include "FragmentsModelAssetFactory.generated.h"
 
-/**
- * Factory for importing .frag files into the editor.
- * It creates a UFragmentsModelAsset which just holds the file path.
- */
 UCLASS()
 class FRAGMENTSUEEDITOR_API UFragmentsModelAssetFactory : public UFactory
 {

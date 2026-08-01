@@ -13,27 +13,17 @@ public:
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
 
-	/**
-	 * Create the plugin's three base materials.
-	 *
-	 * A material that already exists is left untouched unless bForceRebuild is set:
-	 * the build empties the expression graph and saves over the package, so
-	 * rebuilding unasked destroys any edit the user made to it. Only the
-	 * FragmentsUE.GenerateMaterial console command forces it.
-	 */
+	/** bForceRebuild wipes the expression graph and overwrites the package, destroying user edits. */
 	static void GenerateMaterials(bool bForceRebuild = false);
 
 private:
-	/** Hook the IFC metadata layout into the Details panel. */
 	void RegisterDetailCustomizations();
 	void UnregisterDetailCustomizations();
 
-	/** Put the IFC filter panel in Window > IFC Filter. */
 	void RegisterFilterTab();
 	void UnregisterFilterTab();
 
 	TSharedRef<SDockTab> SpawnFilterTab(const FSpawnTabArgs& Args);
 
-	/** Classes registered with the property editor, so shutdown can undo exactly those. */
 	TArray<FName> CustomizedClassNames;
 };

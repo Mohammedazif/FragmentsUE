@@ -6,67 +6,46 @@
 #include "FragMetadata.h"
 #include "FragImportResult.generated.h"
 
-/**
- * Parsed geometry from one Shell (B-rep) in the .frag file.
- * Positions and normals are already transformed to UE coordinate space (LH Z-up, cm).
- */
+/** Positions and normals are in UE space (LH Z-up, centimeters). */
 struct FFragGeometry
 {
-	/** Index of this geometry in the Representations array. */
 	int32 GeometryIndex = -1;
 
-	/** Vertex positions in UE space (centimeters, LH Z-up). */
 	TArray<FVector> Positions;
 
-	/** Per-vertex normals. Computed from face winding if not present in source data. */
+	/** Computed from face winding when the source Shell has none. */
 	TArray<FVector> Normals;
 
-	/** Triangle indices (always int32, widened from uint16 if Shell is not "Big"). */
+	/** Always int32, widened from uint16 when the Shell is not "Big". */
 	TArray<int32> Indices;
 
-	/** Axis-aligned bounding box in UE space. */
 	FBox BoundingBox = FBox(ForceInit);
 };
 
-/**
- * One instance of a geometry — a transform + BIM identity.
- */
 struct FFragInstance
 {
-	/** File-local ID for this element. */
 	int32 LocalId = -1;
 
-	/** Index into FFragImportResult::Geometries. */
 	int32 GeometryIndex = -1;
 
-	/** IFC GlobalId (GUID) string for this element. */
 	FString GUID;
 
-	/** IFC category (e.g., "IfcWall", "IfcSlab"). */
 	FString Category;
 
-	/** Human readable name of the element. */
 	FString Name;
 
-	/** Material index from the Fragments file. */
 	int32 MaterialIndex = -1;
 
-	/** World transform in UE space. */
 	FTransform Transform = FTransform::Identity;
 
-	/** Base color from the Fragments Material. */
 	FLinearColor Color = FLinearColor::White;
 
-	/** Opacity from the Fragments Material alpha channel. */
 	float Opacity = 1.0f;
 
-	/** True if RenderedFaces == TWO. */
+	/** True when the Fragments RenderedFaces value is TWO. */
 	bool bDoubleSided = false;
 };
 
-/** 
- * Recursive spatial hierarchy node (mirrors Fragments SpatialStructure table).
- */
 struct FFragSpatialNode
 {
 	int32 LocalId = -1;
@@ -76,63 +55,41 @@ struct FFragSpatialNode
 	TArray<FFragSpatialNode> Children;
 };
 
-/**
- * Complete parsed result from one .frag file.
- * This is the engine-agnostic intermediate representation — the decoupling layer
- * between the FlatBuffers parser and the UE mesh builder.
- */
 USTRUCT(BlueprintType)
 struct FRAGMENTSUE_API FFragImportResult
 {
 	GENERATED_BODY()
 
-	/** Unique model GUID from the .frag file. */
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	FString ModelGuid;
 
-	/** Human-readable model name derived from the source file path. */
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	FString ModelName;
 
-	/** Raw JSON metadata string from the .frag file. */
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	FString Metadata;
 
-	/** All parsed geometries (Shells). One per unique representation. */
 	TArray<FFragGeometry> Geometries;
 
-	/** All instances (Samples). Each references a geometry + transform. */
 	TArray<FFragInstance> Instances;
 
-	/** BIM spatial hierarchy tree. */
 	FFragSpatialNode SpatialRoot;
 
-	/** All unique categories found in the file. */
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	TArray<FString> Categories;
 
-	/**
-	 * IFC metadata for every item in the file, indexed directly by LocalId
-	 * (the array is parallel to the model's local_ids). Empty when metadata
-	 * import is disabled.
-	 */
+	/** Indexed by LocalId, parallel to the model's local_ids; empty when metadata import is off. */
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	TArray<FFragItemMetadata> Items;
 
-	/**
-	 * Model-level header as an item record: IFC schema, authoring tool, export
-	 * timestamp, project / site / building names and the unit assignment.
-	 */
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	FFragItemMetadata ModelInfo;
 
-	/** Metadata for one item, or null when the id is unknown or metadata was not imported. */
 	const FFragItemMetadata* FindItem(int32 LocalId) const
 	{
 		return Items.IsValidIndex(LocalId) ? &Items[LocalId] : nullptr;
 	}
 
-	// --- Validation stats ---
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	int32 TotalVertices = 0;
 
@@ -143,9 +100,8 @@ struct FRAGMENTSUE_API FFragImportResult
 	int32 TotalInstances = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
-	int32 TotalElements = 0; // Unique GUIDs
+	int32 TotalElements = 0;
 
-	// --- Result ---
 	UPROPERTY(BlueprintReadOnly, Category = "FragmentsUE")
 	bool bSuccess = false;
 

@@ -9,7 +9,6 @@ UFragmentsModelAssetFactory::UFragmentsModelAssetFactory()
 {
 	SupportedClass = UFragmentsModelAsset::StaticClass();
 	
-	// Add .frag extension
 	Formats.Add(TEXT("frag;Fragments Model"));
 
 	bCreateNew = false;

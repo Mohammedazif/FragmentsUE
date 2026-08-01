@@ -19,7 +19,6 @@ namespace
 	/** CreatePackage builds an FName, which is a fatal check past 1023 characters. */
 	constexpr int32 MaxAssetNameChars = 64;
 
-	/** Package names accept letters, digits and underscores; everything else is replaced. */
 	FString SanitizeAssetName(const FString& In)
 	{
 		FString Out;
@@ -43,8 +42,6 @@ namespace
 			Out.InsertAt(0, TEXT('A'));
 		}
 
-		// StrCrc32, not GetTypeHash: the latter is case-insensitive, so two names
-		// differing only in case would share a hash as well as a truncated prefix.
 		if (Out.Len() > MaxAssetNameChars)
 		{
 			Out = Out.Left(MaxAssetNameChars - 9) + FString::Printf(TEXT("_%08x"), FCrc::StrCrc32(*In));
@@ -71,10 +68,7 @@ FFragAssetFactory::FFragAssetFactory(const FString& InRootPath, const FString& I
 	const FString Model = SanitizeAssetName(InModelName.IsEmpty() ? TEXT("Model") : InModelName);
 	BasePath = Root / Model;
 
-	// AssetPath is an unbounded BlueprintReadWrite property, so clamping the leaf name
-	// alone leaves the package path unbounded on the left — and it is the whole path
-	// that CreatePackage turns into an FName. IsValidLongPackageName checks structure
-	// and mount points, not length.
+	// CreatePackage FNames the whole path; IsValidLongPackageName checks structure, not length.
 	if (BasePath.Len() > 200)
 	{
 		UE_LOG(LogFragmentsUE, Error,
@@ -84,8 +78,6 @@ FFragAssetFactory::FFragAssetFactory(const FString& InRootPath, const FString& I
 		return;
 	}
 
-	// Reject a root the engine has no mount point for, rather than failing later
-	// on every single package.
 	if (!FPackageName::IsValidLongPackageName(BasePath / TEXT("Probe"), /*bIncludeReadOnlyRoots*/ false))
 	{
 		UE_LOG(LogFragmentsUE, Error,
@@ -116,11 +108,7 @@ FString FFragAssetFactory::MakeUniqueAssetName(const FString& SubFolder, const F
 	const FString Sanitized = SanitizeAssetName(DesiredName);
 	FString Candidate = Sanitized;
 
-	// UsedNames only knows about this import. Importing the same model twice produces
-	// the same names again, and NewObject with a name already taken in that package
-	// reinitialises the existing object in place — while the first import's components
-	// and their render proxies still point at it. That is a render-thread crash, not a
-	// naming clash, so the check has to reach past this factory to disk and to memory.
+	// Reusing an existing package name reinitialises the live object in place: render-thread crash.
 	int32 Suffix = 1;
 	while (UsedNames.Contains(SubFolder / Candidate) || PackageAlreadyExists(SubFolder, Candidate))
 	{
@@ -143,9 +131,7 @@ UPackage* FFragAssetFactory::CreateAssetPackage(const FString& SubFolder, const 
 
 	const FString PackageName = BasePath / SubFolder / OutAssetName;
 
-	// CreatePackage constructs an FName from this, which is a fatal check rather than
-	// a failure if the path is malformed or over-long. The name is clamped at the
-	// source, so this only fires on a mount point that has gone away mid-import.
+	// CreatePackage FNames this; a malformed or over-long path is a fatal check, not a failure.
 	if (!FPackageName::IsValidLongPackageName(PackageName, /*bIncludeReadOnlyRoots*/ false))
 	{
 		UE_LOG(LogFragmentsUE, Warning, TEXT("Refusing to create package with invalid name %s"), *PackageName);
@@ -217,7 +203,6 @@ UMaterialInterface* FFragAssetFactory::CreateMaterialInstance(
 
 	Instance->SetParentEditorOnly(Parent);
 
-	// Same parameters the dynamic instances set, so baked and runtime match.
 	Instance->SetVectorParameterValueEditorOnly(FMaterialParameterInfo(TEXT("BaseColor")), Color);
 	Instance->SetVectorParameterValueEditorOnly(FMaterialParameterInfo(TEXT("Color")), Color);
 	Instance->SetScalarParameterValueEditorOnly(FMaterialParameterInfo(TEXT("Opacity")), Opacity);

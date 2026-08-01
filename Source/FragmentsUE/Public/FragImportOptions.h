@@ -6,7 +6,6 @@
 #include "Engine/EngineTypes.h"
 #include "FragImportOptions.generated.h"
 
-/** How the model is turned into actors and meshes. */
 UENUM(BlueprintType)
 enum class EFragImportMode : uint8
 {
@@ -29,7 +28,6 @@ enum class EFragImportMode : uint8
 		ToolTip = "Whole model welded per material. Fewest draw calls, no element identity.")
 };
 
-/** True for the modes that build the spatial actor tree. */
 FORCEINLINE bool FragModeUsesHierarchy(EFragImportMode Mode)
 {
 	return Mode == EFragImportMode::HierarchyPerBody
@@ -37,7 +35,6 @@ FORCEINLINE bool FragModeUsesHierarchy(EFragImportMode Mode)
 		|| Mode == EFragImportMode::HierarchyPerStorey;
 }
 
-/** True for the modes that weld elements together, losing per-element components. */
 FORCEINLINE bool FragModeIsMerged(EFragImportMode Mode)
 {
 	return Mode == EFragImportMode::HierarchyPerElement
@@ -45,15 +42,11 @@ FORCEINLINE bool FragModeIsMerged(EFragImportMode Mode)
 		|| Mode == EFragImportMode::MergedWholeModel;
 }
 
-/**
- * Import options for .frag files. Carried through the entire pipeline.
- */
 USTRUCT(BlueprintType)
 struct FRAGMENTSUE_API FFragImportOptions
 {
 	GENERATED_BODY()
 
-	/** How the model is turned into actors and meshes. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE")
 	EFragImportMode ImportMode = EFragImportMode::HierarchyPerBody;
 
@@ -61,15 +54,12 @@ struct FRAGMENTSUE_API FFragImportOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE", meta = (ClampMin = "0.01"))
 	float ScaleFactor = 100.0f;
 
-	/** Import IFC attributes, relations and GUIDs. Disable for geometry-only imports. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE|Metadata")
 	bool bImportMetadata = true;
 
-	/** Resolve IFC property sets and quantities onto each element. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE|Metadata", meta = (EditCondition = "bImportMetadata"))
 	bool bImportPropertySets = true;
 
-	/** Show the imported IFC data in the Details panel of each spawned actor. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE|Metadata", meta = (EditCondition = "bImportMetadata"))
 	bool bAttachMetadataComponents = true;
 
@@ -77,21 +67,13 @@ struct FRAGMENTSUE_API FFragImportOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE|Assets")
 	bool bSaveAsAssets = true;
 
-	/** Content path for generated assets. The model name is appended to it. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE|Assets", meta = (EditCondition = "bSaveAsAssets"))
 	FString AssetPath = TEXT("/Game/Fragments");
 
-	/** Let traces identify elements. Nothing ever blocks movement, on or off. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FragmentsUE|Picking")
 	bool bEnableElementPicking = true;
 
-	/**
-	 * Channel a picking trace must use to hit this model. Everything else is ignored,
-	 * movement channels regardless.
-	 *
-	 * Hidden because Visibility has covered every case so far. Add EditAnywhere to
-	 * surface it; SetElementPickingEnabled can also override it at runtime.
-	 */
+	/** Hidden because Visibility has covered every case so far; add EditAnywhere to surface it. */
 	UPROPERTY()
 	TEnumAsByte<ECollisionChannel> PickingTraceChannel = ECC_Visibility;
 };

@@ -26,13 +26,9 @@
 
 void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 {
-	// Rooted for the duration. A raw local is invisible to the GC, and now that an
-	// existing material short-circuits its block, the gap between construction here and
-	// the first use can span two LoadObject calls that page packages in from disk — any
-	// collection in that window would leave this dangling.
+	// Rooted: a GC pass before the LoadObject calls below would leave this raw pointer dangling.
 	TStrongObjectPtr<UMaterialFactoryNew> MaterialFactory(NewObject<UMaterialFactoryNew>());
 
-		// 1. Generate Opaque Material
 		FString PackageName = TEXT("/FragmentsUE/M_FragBase");
 		FString MaterialName = TEXT("M_FragBase");
 		
@@ -49,10 +45,7 @@ void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 			BaseMaterialObj = (UMaterial*)MaterialFactory->FactoryCreateNew(UMaterial::StaticClass(), Package, FName(*MaterialName), RF_Public | RF_Standalone, nullptr, GWarn);
 		}
 
-		// The block below empties the expression graph, rebuilds it from the hardcoded
-		// layout and saves over the package. Running that on a material the user has
-		// since edited throws their work away with no prompt and no undo, so an
-		// existing material is only rebuilt when asked for by name.
+		// Rebuilding wipes the expression graph and saves over the package, discarding user edits.
 		if ((!bBaseExisted || bForceRebuild) && BaseMaterialObj)
 		{
 			BaseMaterialObj->bUsedWithInstancedStaticMeshes = true;
@@ -119,7 +112,6 @@ void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 
 		}
 
-		// 2. Generate Translucent Material
 		FString TranslucentPackageName = TEXT("/FragmentsUE/M_FragBase_Translucent");
 		FString TranslucentMaterialName = TEXT("M_FragBase_Translucent");
 		
@@ -203,7 +195,6 @@ void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 
 		}
 
-		// 3. Generate Glass Material (Specific for Glass/Windows)
 		FString GlassPackageName = TEXT("/FragmentsUE/M_FragBase_Glass");
 		FString GlassMaterialName = TEXT("M_FragBase_Glass");
 		
@@ -234,7 +225,6 @@ void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 			
 			GlassMaterialObj->GetExpressionCollection().Expressions.Empty();
 
-			// Exact IFC color is roughly a dark tinted blue
 			UMaterialExpressionVectorParameter* BaseColorExp = NewObject<UMaterialExpressionVectorParameter>(GlassMaterialObj);
 			BaseColorExp->ParameterName = TEXT("BaseColor");
 			BaseColorExp->DefaultValue = FLinearColor::White;
@@ -258,16 +248,16 @@ void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 
 			GlassMaterialObj->GetEditorOnlyData()->BaseColor.Expression = BaseColorMul;
 			
-			// Add a slight emissive glow so the blue tint is always visible and luminous
+			// Slight emissive glow keeps the tint visible under dim lighting
 			UMaterialExpressionMultiply* EmissiveMul = NewObject<UMaterialExpressionMultiply>(GlassMaterialObj);
 			EmissiveMul->A.Expression = BaseColorMul;
-			EmissiveMul->ConstB = 0.35f; // 35% of base color as emissive
+			EmissiveMul->ConstB = 0.35f;
 			GlassMaterialObj->GetExpressionCollection().AddExpression(EmissiveMul);
 			GlassMaterialObj->GetEditorOnlyData()->EmissiveColor.Expression = EmissiveMul;
 
 			UMaterialExpressionScalarParameter* OpacityExp = NewObject<UMaterialExpressionScalarParameter>(GlassMaterialObj);
 			OpacityExp->ParameterName = TEXT("Opacity");
-			OpacityExp->DefaultValue = 0.5f; // 50% transparent
+			OpacityExp->DefaultValue = 0.5f;
 			GlassMaterialObj->GetExpressionCollection().AddExpression(OpacityExp);
 			GlassMaterialObj->GetEditorOnlyData()->Opacity.Expression = OpacityExp;
 
@@ -285,7 +275,7 @@ void FFragmentsUEEditorModule::GenerateMaterials(bool bForceRebuild)
 
 			UMaterialExpressionScalarParameter* MetallicExp = NewObject<UMaterialExpressionScalarParameter>(GlassMaterialObj);
 			MetallicExp->ParameterName = TEXT("Metallic");
-			MetallicExp->DefaultValue = 0.0f; // Glass is dielectric
+			MetallicExp->DefaultValue = 0.0f;
 			GlassMaterialObj->GetExpressionCollection().AddExpression(MetallicExp);
 			GlassMaterialObj->GetEditorOnlyData()->Metallic.Expression = MetallicExp;
 
@@ -306,8 +296,6 @@ static FAutoConsoleCommand GCmdGenerateMaterial(
 	TEXT("Rebuilds the M_FragBase materials in the plugin content folder, discarding any edits made to them"),
 	FConsoleCommandDelegate::CreateLambda([]()
 	{
-		// The only path that is allowed to overwrite an existing material, because it
-		// is the only one the user asks for by name.
 		FFragmentsUEEditorModule::GenerateMaterials(/*bForceRebuild*/ true);
 	})
 );
@@ -316,24 +304,20 @@ void FFragmentsUEEditorModule::StartupModule()
 {
 	RegisterDetailCustomizations();
 
-	// The core ticker also runs inside commandlets, where this would mutate and save
-	// plugin content in the middle of a cook.
+	// The core ticker also runs in commandlets, where this would mutate and save content mid-cook.
 	if (IsRunningCommandlet())
 	{
 		return;
 	}
 
-	// After the commandlet guard: a nomad tab needs the slate application, which a
-	// cook does not have.
+	// Registering a nomad tab needs the Slate application, which a commandlet does not have.
 	RegisterFilterTab();
 
-	// Run material generation 3 seconds after module load so the editor and its validators are fully initialized
+	// Deferred ~3s so the editor and its validators are fully initialized
 	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([](float DeltaTime)
 	{
-		// Creates the materials on a fresh install and does nothing on every start
-		// after that — see the note on GenerateMaterials.
 		FFragmentsUEEditorModule::GenerateMaterials(/*bForceRebuild*/ false);
-		return false; // Run once
+		return false;
 	}), 3.0f);
 }
 
@@ -379,13 +363,11 @@ void FFragmentsUEEditorModule::RegisterDetailCustomizations()
 {
 	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 
-	// The metadata component renders the same way whether the user selects the
-	// component itself or the element / spatial node actor that owns it.
 	CustomizedClassNames = {
 		UFragmentsMetadataComponent::StaticClass()->GetFName(),
 		AFragmentsElementActor::StaticClass()->GetFName(),
 		AFragmentsNodeActor::StaticClass()->GetFName(),
-		AFragmentsActor::StaticClass()->GetFName()   // model header: schema, exporter, units
+		AFragmentsActor::StaticClass()->GetFName()
 	};
 
 	for (const FName& ClassName : CustomizedClassNames)
